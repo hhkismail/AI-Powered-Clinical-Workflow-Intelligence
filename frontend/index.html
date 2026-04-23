@@ -1,1 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>ClinicalAI — Doctor's Dashboard</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <h1>ClinicalAI Dashboard</h1>
+    <p>Upload or type doctor notes for AI-powered clinical structuring</p>
+  </header>
 
+  <main>
+    <section class="upload-card">
+      <h2>New Clinical Note</h2>
+
+      <div class="form-row">
+        <label>Patient ID</label>
+        <input type="text" id="patient-id" value="PT-10934">
+      </div>
+      <div class="form-row">
+        <label>Doctor ID</label>
+        <input type="text" id="doctor-id" value="DR-7742">
+      </div>
+      <div class="form-row">
+        <label>Department</label>
+        <select id="department">
+          <option value="Neurology">Neurology</option>
+          <option value="Cardiology">Cardiology</option>
+          <option value="General">General</option>
+          <option value="Emergency">Emergency</option>
+          <option value="Oncology">Oncology</option>
+        </select>
+      </div>
+      <div class="form-row">
+        <label>Priority</label>
+        <select id="priority">
+          <option value="normal">Normal</option>
+          <option value="high">High</option>
+          <option value="critical">Critical</option>
+        </select>
+      </div>
+
+      <div class="form-row">
+        <label>Type note directly (or upload a file below)</label>
+        <textarea id="typed-text" rows="4"
+          placeholder="e.g. Patient presents with severe migraine aura..."></textarea>
+      </div>
+
+      <div class="drop-zone">
+        <p>Upload handwritten note or voice memo (optional — requires Z.AI)</p>
+        <input type="file" id="file-input" accept=".jpg,.jpeg,.png,.mp3,.wav,.m4a">
+        <label for="file-input" class="btn">Choose File</label>
+        <p id="file-name" class="file-name">No file selected</p>
+      </div>
+
+      <button id="submit-btn" class="btn-primary" onclick="submitNote()">
+        Process Note
+      </button>
+    </section>
+
+    <div id="status-area" class="hidden"></div>
+
+    <section id="results-panel" class="results-card hidden">
+      <h2>Processing Result</h2>
+      <div id="result-content"></div>
+    </section>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>
