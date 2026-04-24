@@ -19,7 +19,7 @@ async function submitNote() {
     showStatus("error", "Please enter both Patient ID and Doctor ID.");
     return;
   }
-  if (!typedText && !fileInput.files[0]) {
+  if (!typedText && !file) {
     showStatus("error", "Please type a note or upload a file.");
     return;
   }
@@ -35,9 +35,7 @@ async function submitNote() {
     form.append("department",  department);
     form.append("priority",    priority);
     form.append("typed_text",  typedText);
-    if (fileInput.files[0]) {
-      form.append("file", fileInput.files[0]);
-    }
+    form.append("file",  file);
 
     const res = await fetch(INGESTION_URL, { method: "POST", body: form });
     if (!res.ok) throw new Error(`Server error: ${res.status}`);

@@ -92,7 +92,10 @@ def process_note():
                 input_method = "audio"
         finally:
             os.unlink(tmp_path)
-            
+    
+    if not raw_text:
+        return jsonify({"error": "No usable text extracted"}), 400  
+
     # 3. Build the exact payload Razin's backend expects
     payload = {
         "metadata": {
@@ -103,7 +106,7 @@ def process_note():
             "priority":   priority
         },
         "payload": {
-            "input_methods_used": ["image"] if "file" in request.files and not ZAI_DOWN else ["text"],
+            "input_methods_used": [input_method],
             "raw_text": raw_text
         }
     }
