@@ -4,3 +4,9 @@ __pycache__/
 node_modules/
 ingestion/Lib/
 ingestion/Scripts/
+
+.vscode/
+Lib/
+Scripts/
+venv/
+__pycache__/
