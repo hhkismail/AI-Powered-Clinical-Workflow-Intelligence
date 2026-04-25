@@ -31,3 +31,4 @@ This repository contains the Flask + Supabase backend used by the UI and orchest
 
 - Do not commit `.env` to GitHub.
 - If dependencies change, regenerate `requirements.txt` and commit it.
+# umhackathon2026-clinical

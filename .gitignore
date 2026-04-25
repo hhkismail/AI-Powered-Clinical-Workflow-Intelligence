@@ -37,3 +37,15 @@ htmlcov/
 # OS files
 .DS_Store
 Thumbs.db
+.env
+__pycache__/
+*.pyc
+node_modules/
+ingestion/Lib/
+ingestion/Scripts/
+
+.vscode/
+Lib/
+Scripts/
+venv/
+__pycache__/
