@@ -1,6 +1,5 @@
-// logic of the frontend application
-// ── Only one URL needed — your own ingestion.py ──
-const INGESTION_URL = "http://127.0.0.1:5000/api/process-note";
+// Point to the Flask ingestion server, NOT FastAPI
+const INGESTION_URL = "http://127.0.0.1:5000/api/process-note"; 
 
 document.getElementById("file-input").addEventListener("change", function () {
   document.getElementById("file-name").textContent =
@@ -19,7 +18,8 @@ async function submitNote() {
     showStatus("error", "Please enter both Patient ID and Doctor ID.");
     return;
   }
-  if (!typedText && !file) {
+  
+  if (!typedText && fileInput.files.length === 0) {
     showStatus("error", "Please type a note or upload a file.");
     return;
   }
@@ -28,32 +28,64 @@ async function submitNote() {
   document.getElementById("submit-btn").disabled = true;
 
   try {
-    // Always send as multipart form — ingestion.py handles the rest
+    // 1. Send data as FormData so ingestion.py can read the file
     const form = new FormData();
-    form.append("patient_id",  patientId);
-    form.append("doctor_id",   doctorId);
-    form.append("department",  department);
-    form.append("priority",    priority);
-    form.append("typed_text",  typedText);
-    form.append("file",  file);
+    form.append("patient_id", patientId);
+    form.append("doctor_id", doctorId);
+    form.append("department", department);
+    form.append("priority", priority);
+    form.append("typed_text", typedText);
 
-    const res = await fetch(INGESTION_URL, { method: "POST", body: form });
+    if (fileInput.files.length > 0) {
+      form.append("file", fileInput.files[0]);
+    }
+
+    const res = await fetch(INGESTION_URL, {
+      method: "POST",
+      body: form
+    });
+    
     if (!res.ok) throw new Error(`Server error: ${res.status}`);
-    const data = await res.json();
+    const backendData = await res.json();
 
-    if (data.error) {
-      showStatus("error", data.error);
+    // 2. Handle the AI Safety Halts
+    if (backendData.status === "halted_for_clarification") {
+      const alerts = backendData.system_alerts || [];
+      showStatus("error", "System alert: " + alerts.map(a => a.message).join(" | "));
       return;
     }
 
-    const alerts = data.system_alerts || [];
-    if (alerts.length > 0) {
-      showStatus("error", "System alert: " + alerts.join(" | "));
-    } else {
-      showStatus("success", "Note processed successfully.");
-    }
+    // 3. Translate the FastAPI success data to match Fitri/Anna's UI variables
+    const actionsList = backendData.result?.execution_results?.executed_actions || [];
+    
+    // Dig into the update_record action safely
+    const updateAction = actionsList.find(a => a.tool === "update_record") || {};
+    
+    // THE GOD-MODE EXTRACTOR: Check every possible folder Rizwi or Groq could have hidden the data in
+    const extractedData = updateAction.params 
+                       || updateAction.result?.params 
+                       || updateAction.result?.data 
+                       || updateAction.result?.record
+                       || updateAction.result
+                       || {};
 
-    displayResult(data, { patientId, doctorId, department, priority });
+    // Forcibly grab the arrays no matter what vocabulary the AI used
+    const foundSymptoms = extractedData.diagnoses || extractedData.symptoms || extractedData.diagnosis || [];
+    const foundPrescriptions = extractedData.prescriptions || extractedData.medications || extractedData.drugs || [];
+
+    const formattedData = {
+        status: backendData.status,
+        actions: actionsList,
+        system_alerts: backendData.system_alerts || [],
+        structured_clinical_data: {
+            symptoms: foundSymptoms,
+            diagnosis_codes: foundSymptoms,
+            prescriptions_logged: foundPrescriptions
+        }
+    };
+
+    showStatus("success", "Note processed successfully.");
+    displayResult(formattedData, { patientId, doctorId, department, priority });
 
   } catch (err) {
     showStatus("error", `Something went wrong: ${err.message}`);
@@ -73,14 +105,25 @@ function displayResult(data, meta) {
     ? `<div class="alert-box"><strong>System alert</strong><p>${alerts.join("<br>")}</p></div>`
     : "";
 
-  const rxRows = (cd.prescriptions_logged || []).map(rx =>
-    `<tr><td>${rx.drug}</td><td>${rx.dosage}</td><td>${rx.route}</td></tr>`
-  ).join("");
+  const rxRows = (cd.prescriptions_logged || []).map(rx => {
+  // Fallback 1: If Groq just outputs a flat string instead of an object
+  if (typeof rx === 'string') {
+    return `<tr><td>${rx}</td><td>-</td><td>-</td></tr>`;
+  }
+  
+  // Fallback 2: Check every possible word Groq might use for the keys
+  const drugName = rx.drug || rx.medication || rx.name || "Unknown";
+  const dosage = rx.dosage || rx.dose || rx.amount || "-";
+  const route = rx.route || rx.method || rx.frequency || "-";
+
+  return `<tr><td>${drugName}</td><td>${dosage}</td><td>${route}</td></tr>`;
+}).join("");
 
   const actionTags = actions.map(a =>
     `<span class="badge">${a.tool}</span>`
   ).join(" ");
 
+  
   content.innerHTML = `
     ${alertHtml}
     <div class="result-row"><span class="result-label">Patient</span><span class="result-value">${meta.patientId}</span></div>
@@ -109,4 +152,3 @@ function showStatus(type, message) {
   area.textContent = message;
   area.classList.remove("hidden");
 }
-

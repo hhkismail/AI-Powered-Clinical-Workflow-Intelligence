@@ -11,47 +11,76 @@ app = Flask(__name__)
 CORS(app)  # allows your browser dashboard to call this
 
 ZAI_API_KEY   = os.getenv("ZAI_API_KEY")
-RAZIN_URL     = os.getenv("MOCK_API_BASE_URL") + "/api/process-note"
+RAZIN_URL = "http://127.0.0.1:8000/api/process-note"
 TIMEOUT       = int(os.getenv("TIMEOUT_SECONDS", 30))
 
 # ── Set True while api.ilmu.ai is down, False once it's back ──
-ZAI_DOWN = True
+ZAI_DOWN = False
 
 
 # ─────────────────────────────────────────────
-#  Z.AI helpers
+# Groq Vision & Audio Helpers
 # ─────────────────────────────────────────────
-
 def ocr_image(image_path: str) -> str:
-    """Send an image to Z.AI OCR, return extracted text."""
+    """Send an image to Groq Vision, return extracted text."""
+    # We use the same Groq key you already put in the .env
+    api_key = os.getenv("ZAI_API_KEY") 
+    url = "https://api.groq.com/openai/v1/chat/completions"
+    
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json"
+    }
+    
     with open(image_path, "rb") as f:
-        data = base64.b64encode(f.read()).decode("utf-8")
+        base64_image = base64.b64encode(f.read()).decode("utf-8")
+        
     ext = image_path.rsplit(".", 1)[-1].lower()
     mime = "image/jpeg" if ext in ("jpg", "jpeg") else "image/png"
-    resp = req.post(
-        "https://ocr.z.ai/v1/recognize",
-        headers={"Authorization": f"Bearer {ZAI_API_KEY}",
-                 "Content-Type": "application/json"},
-        json={"image": f"data:{mime};base64,{data}",
-              "language": "en", "mode": "medical"},
-        timeout=TIMEOUT
-    )
+    
+    # Using Groq's Vision model to read the handwriting/text
+    payload = {
+        "model": "llama-3.2-11b-vision-preview",
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Extract all the text from this clinical note exactly as written. Do not add any conversational text, just return the medical note."},
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:{mime};base64,{base64_image}"
+                        }
+                    }
+                ]
+            }
+        ],
+        "temperature": 0.0
+    }
+    
+    resp = req.post(url, headers=headers, json=payload, timeout=TIMEOUT)
     resp.raise_for_status()
-    return resp.json().get("text", "")
+    return resp.json()['choices'][0]['message']['content']
 
 
 def transcribe_audio(audio_path: str) -> str:
-    """Send an audio file to Z.AI Audio, return transcript."""
+    """Send an audio file to Groq Whisper, return transcript."""
+    api_key = os.getenv("ZAI_API_KEY")
+    url = "https://api.groq.com/openai/v1/audio/transcriptions"
+    headers = {"Authorization": f"Bearer {api_key}"}
+    
+    # Using Groq's Whisper model for instant audio transcription
     with open(audio_path, "rb") as f:
-        resp = req.post(
-            "https://audio.z.ai/v1/transcribe",
-            headers={"Authorization": f"Bearer {ZAI_API_KEY}"},
-            files={"file": (os.path.basename(audio_path), f, "audio/mpeg")},
-            data={"language": "en", "domain": "medical"},
-            timeout=TIMEOUT
-        )
-    resp.raise_for_status()
-    return resp.json().get("transcript", "")
+        files = {
+            "file": (os.path.basename(audio_path), f, "audio/mpeg")
+        }
+        data = {
+            "model": "whisper-large-v3",
+            "language": "en"
+        }
+        resp = req.post(url, headers=headers, files=files, data=data, timeout=TIMEOUT)
+        resp.raise_for_status()
+        return resp.json().get("text", "")
 
 
 # ─────────────────────────────────────────────
@@ -75,7 +104,7 @@ def process_note():
     input_method = "text"
     raw_text = typed_text
 
-    if "file" in request.files and not ZAI_DOWN:
+    if "file" in request.files :
         uploaded = request.files["file"]
         fname = uploaded.filename.lower()
 
@@ -85,16 +114,23 @@ def process_note():
 
         try:
             if fname.endswith((".jpg", ".jpeg", ".png")):
-                raw_text = ocr_image(tmp_path)
+                if ZAI_DOWN:
+                    raw_text = "Image uploaded (OCR unavailable)"
+                else:
+                    raw_text = ocr_image(tmp_path)
                 input_method = "image"
+
             elif fname.endswith((".mp3", ".wav", ".m4a")):
-                raw_text = transcribe_audio(tmp_path)
+                if ZAI_DOWN:
+                    raw_text = "Audio uploaded (transcription unavailable)"
+                else:
+                    raw_text = transcribe_audio(tmp_path)
                 input_method = "audio"
         finally:
             os.unlink(tmp_path)
     
     if not raw_text:
-        return jsonify({"error": "No usable text extracted"}), 400  
+        return jsonify({"error": "Please provide text or upload a valid file"}), 400  
 
     # 3. Build the exact payload Razin's backend expects
     payload = {
