@@ -56,12 +56,23 @@ def reserve_bed():
     ward_type = data['ward_type']
     resource_type = str(ward_type).strip().lower()
 
+    # The LLM sends ward types like 'icu' or 'observation'; hospital_resources
+    # stores bed types as ICU_BED / GEN_WARD. Observation beds are general ward beds.
     ward_to_resource_map = {
-        'observation': 'observation',
-        'general': 'general',
-        'icu': 'icu'
+        'icu': 'ICU_BED',
+        'icu_bed': 'ICU_BED',
+        'observation': 'GEN_WARD',
+        'general': 'GEN_WARD',
+        'gen_ward': 'GEN_WARD'
     }
-    mapped_resource_type = ward_to_resource_map.get(resource_type, resource_type)
+    mapped_resource_type = ward_to_resource_map.get(resource_type)
+
+    if mapped_resource_type is None:
+        return jsonify({
+            "status": "error",
+            "error_code": "INVALID_WARD_TYPE",
+            "message": f"Unknown ward_type '{ward_type}'. Expected one of: icu, observation, general."
+        }), 400
 
     try:
         bed_result = (
