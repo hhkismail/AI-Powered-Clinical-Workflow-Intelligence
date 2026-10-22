@@ -15,8 +15,8 @@ from dotenv import load_dotenv
 import httpx
 import requests
 
-# Force-load from the current working directory
-load_dotenv(os.path.join(os.getcwd(), '.env'))
+# Load the shared .env from the repo root, regardless of the working directory
+load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '.env'))
 
 app = FastAPI(
     title="Clinical Notes Automation",
@@ -89,7 +89,7 @@ class MockAPIErrorResponse(BaseModel):
 # CONFIGURATION
 # ========================
 
-MOCK_API_BASE_URL = os.getenv("MOCK_API_BASE_URL", "https://destiny-dropkick-gout.ngrok-free.dev")
+MOCK_API_BASE_URL = os.getenv("MOCK_API_BASE_URL", "http://127.0.0.1:3001")
 TIMEOUT_SECONDS = 60
 
 # LLM System Prompt - exact as specified
@@ -115,8 +115,13 @@ async def call_zai_glm(text: str) -> dict:
     
     # 1. NEW URL FOR GROQ
     url = "https://api.groq.com/openai/v1/chat/completions"
-    print(f"[DEBUG] API Key starts with: {str(api_key)[:5]}...")
-    
+
+    if not api_key:
+        return {
+            "status": "halted_for_clarification",
+            "system_alerts": [{"type": "Configuration Error", "message": "ZAI_API_KEY is not set. Add your Groq API key to .env and restart the orchestrator."}]
+        }
+
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json"
@@ -195,7 +200,7 @@ Output ONLY valid JSON:
         
         return {
             "status": "halted_for_clarification",
-            "system_alerts": [{"type": "Network Timeout", "message": f"Server is busy ({error_type}). Please try again."}]
+            "system_alerts": [{"type": "LLM Request Failed", "message": f"Could not get a response from the Groq API ({error_type}: {e})."}]
         }
 
 
@@ -515,16 +520,19 @@ async def process_note(request: ProcessNoteRequest) -> ProcessNoteResponse:
         if llm_response.get("status") == "halted_for_clarification":
             # Extract the actual clinical reason from the AI's response
             ai_alerts = llm_response.get("system_alerts", [])
+            alert_type = "Clinical Safety Halt"
             if ai_alerts and isinstance(ai_alerts, list) and len(ai_alerts) > 0:
                 ai_message = ai_alerts[0].get("message", "Clinical data incomplete.")
+                # Keep config/network error types so they aren't reported as clinical halts
+                alert_type = ai_alerts[0].get("type", alert_type)
             else:
                 ai_message = llm_response.get("reasoning", "LLM requires clarification")
-                
+
             return ProcessNoteResponse(
                 status="halted_for_clarification",
                 system_alerts=[
                     SystemAlert(
-                        type="Clinical Safety Halt",
+                        type=alert_type,
                         message=ai_message
                     )
                 ]
@@ -606,11 +614,10 @@ async def startup_event():
     print("="*60)
     print(f"Mock API Base URL: {MOCK_API_BASE_URL}")
     print(f"Timeout: {TIMEOUT_SECONDS}s")
-    api_key = os.getenv("ZAI_API_KEY")
-    if api_key:
-        print(f"✅ Z.AI API Key Loaded: {api_key[:5]}...{api_key[-4:]}") # Prints only first and last 4 chars
+    if os.getenv("ZAI_API_KEY"):
+        print("✅ Groq API key loaded (ZAI_API_KEY)")
     else:
-        print("❌ ERROR: Z.AI API Key NOT found in environment!")
+        print("❌ ERROR: ZAI_API_KEY not found in environment! Add your Groq key to .env")
     print("="*60 + "\n")
 
 
