@@ -108,6 +108,10 @@ def process_note():
         uploaded = request.files["file"]
         fname = uploaded.filename.lower()
 
+        needs_groq = fname.endswith((".jpg", ".jpeg", ".png", ".mp3", ".wav", ".m4a"))
+        if needs_groq and not ZAI_DOWN and not ZAI_API_KEY:
+            return jsonify({"error": "ZAI_API_KEY is not set, so image/audio uploads can't be processed. Add your Groq key to .env."}), 500
+
         with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(fname)[1]) as tmp:
             uploaded.save(tmp.name)
             tmp_path = tmp.name
@@ -126,6 +130,8 @@ def process_note():
                 else:
                     raw_text = transcribe_audio(tmp_path)
                 input_method = "audio"
+        except req.exceptions.RequestException as e:
+            return jsonify({"error": f"Groq OCR/transcription request failed: {e}"}), 502
         finally:
             os.unlink(tmp_path)
     
@@ -160,4 +166,4 @@ def process_note():
 if __name__ == "__main__":
     print("Ingestion server running on http://localhost:5000")
     print(f"ZAI_DOWN = {ZAI_DOWN}  (flip to False once api.ilmu.ai recovers)")
-    app.run(debug=True, port=5000)
+    app.run(debug=os.getenv("FLASK_DEBUG") == "1", port=5000)

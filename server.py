@@ -1,7 +1,6 @@
 import os
 import json
 import uuid
-import random
 
 from flask import Flask, request, jsonify
 from flask_cors import CORS
@@ -129,59 +128,69 @@ def reserve_bed():
 # 2. Scheduling API
 @app.route('/api/schedule-appointment', methods=['POST'])
 def schedule_appointment():
-    data = request.get_json() or {}
+    data = request.get_json(silent=True) or {}
 
-    patient_id = data.get('patient_id', 'PT-UNKNOWN')
-    dept = data.get('department', 'General')
+    if not data.get('patient_id'):
+        return missing_parameter_response("The scheduling API requires 'patient_id'.")
+
+    if supabase is None:
+        return supabase_unavailable_response()
+
+    patient_id = data['patient_id']
+    dept = data.get('department') or 'General'
+    appointment_id = str(uuid.uuid4())
 
     try:
-        if supabase:
-            supabase.table('appointments').insert({
-                'id': str(uuid.uuid4()),
-                'patient_id': patient_id,
-                'department': dept,
-                'reason': data.get('reason', 'Routine Checkup')
-            }).execute()
-    except Exception as e:
-        print(f"DB Logging Skipped: {e}")
+        supabase.table('appointments').insert({
+            'id': appointment_id,
+            'patient_id': patient_id,
+            'department': dept,
+            'reason': data.get('reason', 'Routine Checkup')
+        }).execute()
+    except Exception:
+        return supabase_query_failed_response("Unable to save the appointment to the database.")
 
-    # ALWAYS return success so the frontend demo works
     return jsonify({
         "status": "success",
-        "appointment_id": f"APP-{random.randint(1000, 9999)}",
+        "appointment_id": appointment_id,
         "scheduled_details": {
-            "date": data.get('appointment_date', '2026-05-05'),
-            "location": f"{dept} Clinic, Room {random.randint(1, 10)}"
+            "date": data.get('appointment_date'),
+            "location": f"{dept} Clinic"
         },
         "message": "Appointment scheduled successfully."
     }), 200
 
 
-# 2. THE DATA SWALLOW FIX (EMR Update)
+# 3. EMR Update
 @app.route('/api/update-record', methods=['POST'])
 def update_record():
-    data = request.get_json() or {}
+    data = request.get_json(silent=True) or {}
 
-    # Capture the medical data immediately
+    if not data.get('patient_id'):
+        return missing_parameter_response("The EMR update API requires 'patient_id'.")
+
+    if supabase is None:
+        return supabase_unavailable_response()
+
     structured_data = {
         'diagnoses': data.get('diagnoses', []),
         'prescriptions': data.get('prescriptions', [])
     }
-    
+    record_id = str(uuid.uuid4())
+
     try:
-        if supabase:
-            supabase.table('clinical_notes').insert({
-                'id': str(uuid.uuid4()),
-                'patient_id': data.get('patient_id', 'PT-12345'),
-                'structured_data': json.dumps(structured_data)
-            }).execute()
-    except Exception as e:
-        print(f"DB Sync Skipped: {e}")
-        
-    # CRITICAL FIX: We return the 'params' key so the Frontend sees the results!
+        supabase.table('clinical_notes').insert({
+            'id': record_id,
+            'patient_id': data['patient_id'],
+            'structured_data': json.dumps(structured_data)
+        }).execute()
+    except Exception:
+        return supabase_query_failed_response("Unable to save the clinical note to the database.")
+
+    # The frontend reads the extracted diagnoses/prescriptions back from 'params'
     return jsonify({
         "status": "success",
-        "record_id": str(uuid.uuid4()),
+        "record_id": record_id,
         "message": "Patient EMR successfully updated.",
         "params": structured_data  
     }), 200
@@ -269,5 +278,5 @@ def home():
     }), 200
 
 if __name__ == '__main__':
-    # Runs the server on port 3001 to avoid conflicts
-    app.run(port=3001, debug=True)
+    # Runs the server on port 3001 to avoid conflicts. Set FLASK_DEBUG=1 to enable the debugger locally.
+    app.run(port=3001, debug=os.getenv("FLASK_DEBUG") == "1")
