@@ -45,7 +45,7 @@ ingestion/Lib/
 ingestion/Scripts/
 
 .vscode/
-/Lib/
-/Scripts/
+Lib/
+Scripts/
 venv/
 __pycache__/
