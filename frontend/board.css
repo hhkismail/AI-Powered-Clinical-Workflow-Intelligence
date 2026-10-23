@@ -111,3 +111,9 @@
   .waiting-row { grid-template-columns: minmax(0, 1fr) auto; }
   .waiting-actions { grid-column: 1 / -1; }
 }
+
+/* Stopping a medication from the drawer */
+.med-lines li { grid-template-columns: 52px 1fr auto; align-items: start; }
+.btn-link { border: 0; background: none; padding: 2px 4px; font: 500 12px "IBM Plex Sans", Arial, sans-serif; color: var(--ink-3); cursor: pointer; border-radius: 4px; }
+.btn-link:hover { color: var(--crit); background: var(--crit-soft); }
+.med-stop-confirm { grid-column: 1 / -1; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: 6px; padding: 8px 10px; border-radius: var(--radius-sm); background: var(--crit-soft); font-size: 13px; }

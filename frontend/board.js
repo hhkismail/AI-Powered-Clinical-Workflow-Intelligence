@@ -134,12 +134,16 @@ function renderBoard(board, openBedId) {
 }
 
 function renderTask(t) {
+  const isStop = t.proposed_action === "stop_medication";
   const meta = t.status === "accepted"
     ? `Accepted by ${escapeHtml(t.decided_by || "unknown")}`
+    : isStop ? "AI proposes stopping this medication"
     : `Suggested by ${t.suggested_by === "ai" ? "AI" : "a clinician"}`;
+  // Accepting a stop proposal stops the drug, so the buttons say exactly that
+  const [yes, no] = isStop ? ["Stop it", "Keep it"] : ["Accept", "Reject"];
   const buttons = t.status === "suggested"
-    ? `<button class="btn btn-sm btn-accept" data-action="decide" data-decision="accept" data-task="${escapeHtml(t.id)}">Accept</button>
-       <button class="btn btn-sm btn-reject" data-action="decide" data-decision="reject" data-task="${escapeHtml(t.id)}">Reject</button>`
+    ? `<button class="btn btn-sm ${isStop ? "btn-danger" : "btn-accept"}" data-action="decide" data-decision="accept" data-task="${escapeHtml(t.id)}">${yes}</button>
+       <button class="btn btn-sm btn-reject" data-action="decide" data-decision="reject" data-task="${escapeHtml(t.id)}">${no}</button>`
     : `<button class="btn btn-sm" data-action="decide" data-decision="done" data-task="${escapeHtml(t.id)}">Mark done</button>`;
   return `
     <li class="task task-${escapeHtml(t.status)}">
@@ -169,11 +173,17 @@ function renderDischarge(bed, confirming) {
 }
 
 // Acuity, allergies, history, medications and tasks: shared by bed and waiting-list drawers
-function renderPatientDetails(p, now) {
+function renderPatientDetails(p, now, confirmStopId) {
   const meds = p.medications || [];
   const tasks = p.tasks || [];
+  const stopControl = m => m.id === confirmStopId
+    ? `<div class="med-stop-confirm">Stop ${escapeHtml(m.drug)}?
+         <button class="btn btn-sm btn-danger" data-action="stop-med-confirm" data-med="${escapeHtml(m.id)}">Stop</button>
+         <button class="btn btn-sm" data-action="stop-med-cancel">Cancel</button></div>`
+    : `<button class="btn-link" data-action="stop-med-start" data-med="${escapeHtml(m.id)}">Stop</button>`;
   const medLine = m => `<li><span class="route ${m.route === "iv" ? "route-iv" : ""}">${escapeHtml(ROUTE_LABELS[m.route] || "")}</span>
-    <div><b>${escapeHtml(m.drug)}</b> ${escapeHtml(m.dose || "")}${m.frequency ? `<small>${escapeHtml(m.frequency)}</small>` : ""}</div></li>`;
+    <div><b>${escapeHtml(m.drug)}</b> ${escapeHtml(m.dose || "")}${m.frequency ? `<small>${escapeHtml(m.frequency)}</small>` : ""}</div>
+    ${m.id ? stopControl(m) : ""}</li>`;
   return `
       <div class="acuity-line acuity-${escapeHtml(p.acuity || "unknown")}">
         <span class="acuity">${escapeHtml(ACUITY_LABELS[p.acuity] || "Not assessed")}</span>
@@ -197,11 +207,11 @@ function drawerHead(p, subtitle) {
     </div>`;
 }
 
-function renderPanel(bed, now, confirmingDischarge) {
+function renderPanel(bed, now, confirmingDischarge, confirmStopId) {
   return `
     ${drawerHead(bed.patient, `${escapeHtml(bed.name)} (${escapeHtml(bed.id)})`)}
     <div class="drawer-body">
-      ${renderPatientDetails(bed.patient, now)}
+      ${renderPatientDetails(bed.patient, now, confirmStopId)}
       ${renderDischarge(bed, confirmingDischarge)}
     </div>`;
 }
@@ -252,11 +262,11 @@ function renderWaiting(board, openRequestId, now) {
     </section>`;
 }
 
-function renderWaitingPanel(w, now) {
+function renderWaitingPanel(w, now, confirmStopId) {
   return `
     ${drawerHead(w.patient, waitingSubtitle(w, now))}
     <div class="drawer-body">
-      ${renderPatientDetails(w.patient, now)}
+      ${renderPatientDetails(w.patient, now, confirmStopId)}
       <div class="discharge"><div class="task-buttons">${waitingActions(w)}</div></div>
     </div>`;
 }
@@ -280,7 +290,7 @@ if (typeof document !== "undefined") {
     const m = location.hash.match(/^#(bed|waiting)=(.+)$/);
     return m ? { kind: m[1], id: decodeURIComponent(m[2]) } : null;
   };
-  const state = { board: null, open: openFromHash(), loadedAt: null, confirmDischarge: false };
+  const state = { board: null, open: openFromHash(), loadedAt: null, confirmDischarge: false, confirmStop: null };
   const openId = kind => (state.open && state.open.kind === kind ? state.open.id : null);
   const $ = id => document.getElementById(id);
 
@@ -307,10 +317,10 @@ if (typeof document !== "undefined") {
     const bed = openId("bed") && findBed(state.board, openId("bed"));
     const waiting = openId("waiting") && findWaiting(state.board, openId("waiting"));
     if (bed && bed.patient) {
-      $("panel-content").innerHTML = renderPanel(bed, undefined, state.confirmDischarge);
+      $("panel-content").innerHTML = renderPanel(bed, undefined, state.confirmDischarge, state.confirmStop);
       $("panel").classList.remove("hidden");
     } else if (waiting && waiting.patient) {
-      $("panel-content").innerHTML = renderWaitingPanel(waiting);
+      $("panel-content").innerHTML = renderWaitingPanel(waiting, undefined, state.confirmStop);
       $("panel").classList.remove("hidden");
     } else {
       // The patient may have moved, got a bed or been discharged since the link was made
@@ -321,6 +331,7 @@ if (typeof document !== "undefined") {
   function setOpen(kind, id) {
     state.open = kind && id ? { kind, id } : null;
     state.confirmDischarge = false;
+    state.confirmStop = null;
     history.replaceState(null, "", state.open ? `#${kind}=${encodeURIComponent(id)}` : location.pathname);
     render();
     if (state.open) $("panel").querySelector(".btn-close")?.focus();
@@ -402,6 +413,16 @@ if (typeof document !== "undefined") {
         target.disabled = true;
         await post(`/api/bed-requests/${encodeURIComponent(target.dataset.request)}/cancel`, { clinician_id: clinician });
         if (openId("waiting") === target.dataset.request) setOpen(null);
+        await load();
+      } else if (action === "stop-med-start" || action === "stop-med-cancel") {
+        state.confirmStop = action === "stop-med-start" ? target.dataset.med : null;
+        render();
+      } else if (action === "stop-med-confirm") {
+        const clinician = clinicianFor("stopping a medication");
+        if (!clinician) return;
+        target.disabled = true;
+        await post(`/api/medications/${encodeURIComponent(target.dataset.med)}/stop`, { clinician_id: clinician });
+        state.confirmStop = null;
         await load();
       } else if (action === "mark-clean") {
         target.disabled = true;

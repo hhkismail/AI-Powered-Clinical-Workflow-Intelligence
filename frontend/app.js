@@ -66,8 +66,14 @@ function describeAction(a) {
                    plural((params.prescriptions || []).length, "prescription")];
     if (params.acuity) parts.push(`acuity ${ACUITY_LABELS[params.acuity] || params.acuity}`);
     const suggested = r.care_tasks_suggested || 0;
+    const stopped = r.medications_stopped || [];
+    const proposed = r.stops_proposed || 0;
+    const missing = r.discontinue_not_found || [];
     return `Record updated: ${escapeHtml(parts.join(", "))}` +
-           (suggested ? `. ${plural(suggested, "next step")} sent to the ward board for review` : "");
+           (suggested ? `. ${plural(suggested, "next step")} sent to the ward board for review` : "") +
+           (stopped.length ? `. Stopped as the note says: ${list(stopped)}` : "") +
+           (proposed ? `. ${plural(proposed, "medication stop")} proposed for a clinician to confirm` : "") +
+           (missing.length ? `. Not on the ward orders, so not stopped: ${list(missing)}` : "");
   }
   if (a.tool === "reserve_bed" && r.status === "queued") {
     const label = WARD_LABELS[r.waiting_for] || r.waiting_for;

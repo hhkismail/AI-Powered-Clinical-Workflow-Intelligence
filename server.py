@@ -1,5 +1,6 @@
 import os
 import sys
+import re
 import uuid
 from datetime import date, datetime, timedelta, timezone
 
@@ -64,6 +65,52 @@ def task_key(task):
     return ' '.join(str(task.get('description') or '').lower().split()).rstrip('.')
 
 
+# Words that make a stop explicit when they're in the same sentence as the drug
+STOP_WORDS = re.compile(r"\b(stop|stopped|stopping|discontinue|discontinued|discontinuing|cease|ceased|"
+                        r"hold|held|withhold|withheld|d/c)\b", re.IGNORECASE)
+
+
+def note_explicitly_stops(note_text, drug):
+    """True if a sentence of the note names the drug together with a stop word.
+    The LLM labels stops as explicit or inferred; this checks the label against
+    the doctor's own words, so an inferred stop is never applied as an order."""
+    if not note_text or not drug:
+        return False
+    for sentence in re.split(r"[.;\n]+", note_text):
+        if re.search(rf"\b{re.escape(drug)}\b", sentence, re.IGNORECASE) and STOP_WORDS.search(sentence):
+            return True
+    return False
+
+
+def matching_orders(active_orders, drug, dose=None):
+    """Active orders for this drug (ignoring case); the matching dose first if one is given."""
+    name = ' '.join(str(drug or '').lower().split())
+    found = [o for o in active_orders if ' '.join(str(o.get('drug') or '').lower().split()) == name]
+    if dose:
+        same_dose = [o for o in found if medication_key(o)[1] == medication_key({'dose': dose})[1]]
+        return same_dose or found
+    return found
+
+
+def stop_order(order_id, stopped_by, reason):
+    """Stop an active medication order. Returns the row, or None if it wasn't active."""
+    rows = supabase.table('medication_orders').update({
+        'status': 'stopped',
+        'ended_at': datetime.now(timezone.utc).isoformat(),
+        'stopped_by': stopped_by,
+        'stop_reason': reason
+    }).eq('id', order_id).eq('status', 'active').execute().data or []
+    return rows[0] if rows else None
+
+
+def cancel_stop_proposals(order_id, by):
+    """Once a medication is stopped, open suggestions to stop it are moot."""
+    for status in ('suggested', 'accepted'):
+        supabase.table('care_tasks').update({
+            'status': 'cancelled', 'decided_at': datetime.now(timezone.utc).isoformat(), 'decided_by': by
+        }).eq('medication_order_id', order_id).eq('proposed_action', 'stop_medication').eq('status', status).execute()
+
+
 def medication_order_rows(patient_id, prescriptions, note_id):
     rows = []
     for rx in prescriptions or []:
@@ -71,7 +118,11 @@ def medication_order_rows(patient_id, prescriptions, note_id):
         drug = rx.get('drug') or rx.get('medication') or rx.get('name')
         if not drug:
             continue
+        drug = str(drug).strip()
+        if drug.islower():          # "diltiazem" -> "Diltiazem", so the board reads consistently
+            drug = drug[0].upper() + drug[1:]
         rows.append({
+            'id': str(uuid.uuid4()),
             'patient_id': patient_id,
             'drug': str(drug),
             'dose': rx.get('dosage') or rx.get('dose'),
@@ -96,6 +147,8 @@ def care_task_rows(patient_id, next_steps, note_id):
             'category': category if category in TASK_CATEGORIES else 'other',
             'status': 'suggested',      # a clinician has to accept it on the ward board
             'suggested_by': 'ai',
+            'proposed_action': None,
+            'medication_order_id': None,
             'source_note_id': note_id
         })
     return rows
@@ -476,7 +529,7 @@ def update_record():
     try:
         # A follow-up note often repeats current prescriptions and plans;
         # don't duplicate active orders or tasks that are still open
-        active = supabase.table('medication_orders').select('drug, dose, route') \
+        active = supabase.table('medication_orders').select('id, drug, dose, route') \
             .eq('patient_id', patient_id).eq('status', 'active').execute().data or []
         active_keys = {medication_key(m) for m in active}
         medications = [m for m in medications if medication_key(m) not in active_keys]
@@ -496,6 +549,41 @@ def update_record():
             supabase.table('medication_orders').insert(medications).execute()
         if tasks:
             supabase.table('care_tasks').insert(tasks).execute()
+        # Discontinuations, matched against orders that existed before this note.
+        # Explicit stops in the note are the doctor's order; anything else is only a
+        # suggestion that a clinician has to accept.
+        stopped, stop_suggestions, unmatched = [], 0, []
+        open_proposals = {t.get('medication_order_id') for t in supabase.table('care_tasks')
+                          .select('medication_order_id, status').eq('patient_id', patient_id)
+                          .eq('proposed_action', 'stop_medication').execute().data or []
+                          if t.get('status') in ('suggested', 'accepted')}
+        for item in data.get('discontinue') or []:
+            item = item if isinstance(item, dict) else {'drug': str(item)}
+            orders = matching_orders(active, item.get('drug'), item.get('dose'))
+            if not orders:
+                unmatched.append(str(item.get('drug')))
+                continue
+            reason = str(item.get('reason') or '').strip() or None
+            for order in orders:
+                if item.get('explicit') and note_explicitly_stops(data.get('raw_input'), order['drug']):
+                    if stop_order(order['id'], data.get('recorded_by') or 'clinical note', reason):
+                        stopped.append(order['drug'])
+                        cancel_stop_proposals(order['id'], data.get('recorded_by') or 'clinical note')
+                elif order['id'] not in open_proposals:
+                    supabase.table('care_tasks').insert({
+                        'id': str(uuid.uuid4()),
+                        'patient_id': patient_id,
+                        'description': f"Stop {order['drug']}?" + (f" {reason}" if reason else ""),
+                        'category': 'medication',
+                        'status': 'suggested',
+                        'suggested_by': 'ai',
+                        'proposed_action': 'stop_medication',
+                        'medication_order_id': order['id'],
+                        'source_note_id': record_id
+                    }).execute()
+                    open_proposals.add(order['id'])
+                    stop_suggestions += 1
+
         if acuity:
             supabase.table('patients').update({
                 'acuity': acuity,
@@ -513,7 +601,10 @@ def update_record():
         "message": "Patient EMR successfully updated.",
         "params": structured_data,
         "medication_orders_created": len(medications),
-        "care_tasks_suggested": len(tasks)
+        "care_tasks_suggested": len(tasks),
+        "medications_stopped": stopped,
+        "stops_proposed": stop_suggestions,
+        "discontinue_not_found": unmatched
     }), 200
 
 # 4. Fetch Patient Profile (Read)
@@ -631,7 +722,8 @@ def get_ward_board():
                     .in_('patient_id', patient_ids).eq('status', 'active').execute().data or []:
                 medications.setdefault(m['patient_id'], []).append(m)
             for t in supabase.table('care_tasks') \
-                    .select('id, patient_id, description, category, status, suggested_by, created_at, decided_at, decided_by') \
+                    .select('id, patient_id, description, category, status, suggested_by, created_at, decided_at, decided_by, '
+                            'proposed_action, medication_order_id') \
                     .in_('patient_id', patient_ids).in_('status', ['suggested', 'accepted']).execute().data or []:
                 tasks.setdefault(t['patient_id'], []).append(t)
     except Exception as e:
@@ -742,7 +834,16 @@ def decide_task(task_id):
         updated = supabase.table('care_tasks').update(changes) \
             .eq('id', task_id).eq('status', current_status).execute().data or []
         if updated:
-            return jsonify({"status": "success", "task": updated[0]}), 200
+            task = updated[0]
+            stopped = None
+            # Accepting "Stop X?" stops X, and the task is then done
+            if decision == 'accept' and task.get('proposed_action') == 'stop_medication' and task.get('medication_order_id'):
+                stopped = stop_order(task['medication_order_id'], clinician_id, task.get('description'))
+                task = (supabase.table('care_tasks').update({
+                    'status': 'done', 'completed_at': datetime.now(timezone.utc).isoformat()
+                }).eq('id', task_id).execute().data or [task])[0]
+            return jsonify({"status": "success", "task": task,
+                            "medication_stopped": stopped['drug'] if stopped else None}), 200
 
         existing = supabase.table('care_tasks').select('id, status').eq('id', task_id).execute().data or []
     except Exception as e:
@@ -757,6 +858,33 @@ def decide_task(task_id):
         "error_code": "INVALID_TRANSITION",
         "message": f"Can't {decision} a task that is '{existing[0]['status']}' (it must be '{current_status}')."
     }), 409
+
+
+# 10. Stop a medication (Write): a clinician stops an active order from the board
+@app.route('/api/medications/<order_id>/stop', methods=['POST'])
+def stop_medication(order_id):
+    data = request.get_json(silent=True) or {}
+    clinician_id = str(data.get('clinician_id') or '').strip()
+    if not clinician_id:
+        return missing_parameter_response("Stopping a medication requires 'clinician_id'.")
+    if supabase is None:
+        return supabase_unavailable_response()
+    reason = str(data.get('reason') or '').strip() or 'Stopped from the ward board'
+    try:
+        stopped = stop_order(order_id, clinician_id, reason)
+        if stopped:
+            cancel_stop_proposals(order_id, clinician_id)
+            return jsonify({"status": "success", "medication": {"id": order_id, "drug": stopped.get('drug'),
+                                                                 "status": "stopped"}}), 200
+        existing = supabase.table('medication_orders').select('id, status').eq('id', order_id).execute().data or []
+    except Exception as e:
+        print(f"[stop-medication] Supabase error: {e}")
+        return supabase_query_failed_response("Unable to stop the medication.")
+    if not existing:
+        return jsonify({"status": "error", "error_code": "MEDICATION_NOT_FOUND",
+                        "message": f"No medication order with id {order_id}."}), 404
+    return jsonify({"status": "error", "error_code": "INVALID_TRANSITION",
+                    "message": f"This medication is already {existing[0]['status']}."}), 409
 
 
 # 9. Discharge (Write): the patient leaves; their bed needs cleaning before reuse

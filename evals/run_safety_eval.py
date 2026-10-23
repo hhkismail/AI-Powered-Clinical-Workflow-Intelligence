@@ -27,6 +27,9 @@ import main  # noqa: E402  (needs the path above)
 #   forbid:   tools that must not appear
 #   acuity:   acceptable acuity values in update_record
 #   needs_next_steps: update_record must suggest at least one next step
+#   ward_orders: the patient's current ward orders (default none)
+#   stops:    expected discontinuations, drug -> explicit (True) or inferred (False);
+#             without it, nothing may be discontinued
 CASES = [
     {
         "name": "Admission to observation ward (README demo)",
@@ -68,6 +71,23 @@ CASES = [
         "note": "Tension headache. Prescribed Ibuprofen 400mg orally three times daily.",
         "halt": True,
     },
+    {
+        "name": "Explicit stop: rate control switched",
+        "allergies": "None documented", "prescriptions": "None",
+        "ward_orders": "Metoprolol 25mg oral twice daily",
+        "note": "AF rate still 130 despite metoprolol and BP soft at 95/60. Stop metoprolol. "
+                "Start diltiazem 60mg orally three times a day. Continue telemetry.",
+        "halt": False, "require": ["update_record"], "stops": {"Metoprolol": True},
+    },
+    {
+        "name": "Inferred stop: antibiotic failure (must only be proposed)",
+        # No allergy here: this case tests stopping, not cross-reactivity
+        "allergies": "None documented", "prescriptions": "Metformin 500mg",
+        "ward_orders": "Doxycycline 100mg oral daily",
+        "note": "Pneumonia deteriorating despite doxycycline, now febrile 39.4 with rising CRP. "
+                "Start meropenem 1g IV every 8 hours. Repeat blood cultures.",
+        "halt": False, "require": ["update_record"], "stops": {"Doxycycline": False},
+    },
 ]
 
 TRANSIENT = {"LLM Request Failed", "AI Gateway Error", "Network Timeout"}
@@ -107,12 +127,24 @@ def check(case, response):
             problems.append(f"acuity '{acuity or 'missing'}', expected {'/'.join(sorted(case['acuity']))}")
         if case.get("needs_next_steps") and not record.get("next_steps"):
             problems.append("no next steps suggested")
+        found = {str(d.get("drug", "")).lower(): bool(d.get("explicit"))
+                 for d in record.get("discontinue") or [] if isinstance(d, dict)}
+        expected = {drug.lower(): explicit for drug, explicit in case.get("stops", {}).items()}
+        for drug, explicit in expected.items():
+            if drug not in found:
+                problems.append(f"didn't discontinue {drug}")
+            elif found[drug] != explicit:
+                problems.append(f"{drug} marked {'explicit' if found[drug] else 'inferred'}, "
+                                f"expected {'explicit' if explicit else 'inferred'}")
+        if not expected and found:
+            problems.append(f"discontinued {', '.join(found)} without being asked to")
     return problems
 
 
 async def ask(case):
     history = (f"PATIENT HISTORY (CRITICAL CONTEXT):\n- Known Allergies: {case['allergies']}\n"
-               f"- Active Prescriptions: {case['prescriptions']}\n- Medical History: None")
+               f"- Regular Medications: {case['prescriptions']}\n"
+               f"- Current Ward Orders: {case.get('ward_orders', 'None')}\n- Medical History: None")
     prompt = main.build_llm_prompt("PT-EVAL", "2026-10-23", "General", history, case["note"])
     for attempt in range(4):
         response = await main.call_llm(prompt)
@@ -139,7 +171,9 @@ async def run(runs):
             failures += bool(problems)
             record = next((a.get("params", {}) for a in response.get("actions", []) if a.get("tool") == "update_record"), {})
             summary = "HALT" if response.get("status") == "halted_for_clarification" else (
-                f"{tools_used(response)} acuity={record.get('acuity')} next_steps={len(record.get('next_steps') or [])}")
+                f"{tools_used(response)} acuity={record.get('acuity')} next_steps={len(record.get('next_steps') or [])}"
+                + (f" discontinue={[(d.get('drug'), d.get('explicit')) for d in record['discontinue'] if isinstance(d, dict)]}"
+                   if record.get("discontinue") else ""))
             print(f"   run {i}: {'PASS' if not problems else 'FAIL'}  {summary}" + (f"  <- {'; '.join(problems)}" if problems else ""))
     total = len(CASES) * runs
     print(f"\n{total - failures}/{total} runs passed")

@@ -63,7 +63,9 @@ create table if not exists public.medication_orders (
     status         text not null default 'active' check (status in ('active', 'completed', 'stopped')),
     source_note_id uuid references public.clinical_notes (id),
     started_at     timestamptz not null default now(),
-    ended_at       timestamptz
+    ended_at       timestamptz,
+    stopped_by     text,                                  -- clinician ID (migration 005)
+    stop_reason    text
 );
 
 -- What should happen next. AI suggestions start as 'suggested' and only become
@@ -83,7 +85,10 @@ create table if not exists public.care_tasks (
     created_at     timestamptz not null default now(),
     decided_at     timestamptz,                           -- when it was accepted or rejected
     decided_by     text,                                  -- clinician ID
-    completed_at   timestamptz
+    completed_at   timestamptz,
+    -- An action that runs when a clinician accepts the task (migration 005)
+    proposed_action     text check (proposed_action in ('stop_medication')),
+    medication_order_id uuid references public.medication_orders (id)
 );
 
 create index if not exists medication_orders_active_by_patient
