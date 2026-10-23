@@ -17,6 +17,7 @@ from dotenv import load_dotenv
 import httpx
 
 from allergy_rules import check_prescriptions
+import mock_llm
 import requests
 
 # Load the shared .env from the repo root, regardless of the working directory
@@ -34,7 +35,9 @@ async def lifespan(app: FastAPI):
     print("="*60)
     print(f"Mock API Base URL: {MOCK_API_BASE_URL}")
     print(f"Timeout: {TIMEOUT_SECONDS}s")
-    if get_groq_api_key():
+    if mock_ai_enabled():
+        print("⚠️  MOCK_AI is on: notes are planned by keyword rules, not the LLM")
+    elif get_groq_api_key():
         print(f"✅ Groq API key loaded (model: {GROQ_CHAT_MODEL})")
     else:
         print("❌ ERROR: GROQ_API_KEY not found in environment! Add your Groq key to .env")
@@ -103,6 +106,10 @@ class ProcessNoteResponse(BaseModel):
         default=None,
         description="List of system alerts if any"
     )
+    ai: str = Field(
+        default_factory=lambda: "mock" if mock_ai_enabled() else "llm",
+        description="'mock' when MOCK_AI planned the note with keyword rules instead of the LLM"
+    )
     result: Optional[Dict[str, Any]] = Field(
         default=None,
         description="Processing result if successful"
@@ -122,6 +129,11 @@ GROQ_CHAT_MODEL = os.getenv("GROQ_CHAT_MODEL", "openai/gpt-oss-120b")
 def get_groq_api_key() -> Optional[str]:
     """GROQ_API_KEY, falling back to the legacy ZAI_API_KEY name."""
     return os.getenv("GROQ_API_KEY") or os.getenv("ZAI_API_KEY")
+
+
+def mock_ai_enabled() -> bool:
+    """MOCK_AI=1 swaps the LLM for the rule-based planner in mock_llm.py."""
+    return os.getenv("MOCK_AI", "").strip().lower() in ("1", "true", "yes", "on")
 
 
 class APIRejection(Exception):
@@ -149,8 +161,10 @@ def build_llm_prompt(patient_id: str, encounter_date: str, department: str, pati
 
 async def call_llm(text: str) -> dict:
     """Calls the Groq chat model (GROQ_CHAT_MODEL) for JSON extraction and action planning."""
+    if mock_ai_enabled():
+        return mock_llm.plan(text)
     api_key = get_groq_api_key()
-    
+
     # 1. NEW URL FOR GROQ
     url = "https://api.groq.com/openai/v1/chat/completions"
 
@@ -734,6 +748,7 @@ async def health_check() -> Dict[str, str]:
     return {
         "status": "healthy",
         "service": "Clinical Notes Orchestrator",
+        "ai": "mock" if mock_ai_enabled() else GROQ_CHAT_MODEL,
         "timestamp": datetime.now().isoformat()
     }
 

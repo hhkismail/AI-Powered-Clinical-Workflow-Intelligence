@@ -15,12 +15,58 @@ OPHIA is a hackathon prototype of an AI clinical workflow orchestrator. It takes
 ---
 
 ## 🏗️ Architecture
-OPHIA runs as four small services:
+OPHIA runs as four small services. The browser only ever talks to the Flask services; the Supabase secret key stays on the servers.
 
-1.  **Ingestion Engine (Port 5000):** Flask-based gateway for multimodal data (OCR/Audio ingestion).
-2.  **The Orchestrator (Port 8000):** FastAPI "Brain" powered by **Groq (`openai/gpt-oss-120b`)** for clinical reasoning. Image notes are read with `qwen/qwen3.8-27b` and audio with `whisper-large-v3`.
-3.  **Mock EMR API (Port 3001):** The execution layer that routes AI commands to **Supabase** persistence.
-4.  **Frontend (Port 5500):** Two vanilla JS pages, no build step. The **clinical notes** page submits notes; the **ward board** shows every bed live.
+```mermaid
+flowchart LR
+    subgraph Browser
+        notes["Clinical notes page<br/>index.html"]
+        board["Ward board<br/>board.html"]
+    end
+    groq[("Groq<br/>LLM, vision, Whisper")]
+    db[("Supabase Postgres<br/>RLS on every table")]
+
+    notes -- "note, photo or voice memo" --> ingest["Ingestion gateway<br/>Flask :5000"]
+    ingest -- "OCR / transcription" --> groq
+    ingest -- "note text" --> orch["Orchestrator<br/>FastAPI :8000"]
+    orch -- "allergies, ward orders" --> db
+    orch -- "prompt → JSON plan" --> groq
+    orch -- "allergy rules, then actions" --> emr["Mock EMR API<br/>Flask :3001"]
+    emr --> db
+    notes -- "patient context" --> emr
+    board -- "poll every 5 s, decisions" --> emr
+```
+
+What happens to a note:
+1. **Ingestion** (`ingestion/`) turns a photo (vision model `qwen/qwen3.8-27b`) or voice memo (`whisper-large-v3`) into text and combines it with anything typed.
+2. **The orchestrator** (`Ophia/main.py`) loads the patient's allergies and current ward orders, then asks the LLM (`openai/gpt-oss-120b`, JSON mode) for a plan: update the record, reserve a bed, book a follow-up. If the record can't be checked, the note is halted.
+3. **Allergy rules** (`Ophia/allergy_rules.py`) check every planned prescription before anything runs: a conflict blocks the whole note, possible cross-reactivity goes ahead with a warning.
+4. **The Mock EMR API** (`server.py`) carries out the actions in Supabase: the clinical note, medication orders, AI-suggested tasks, beds and the waiting list. It re-checks allergies and stop orders itself, so it doesn't trust the LLM.
+5. **The ward board** (`frontend/board.html`) shows the result, and clinicians accept or reject what the AI suggested.
+
+With `MOCK_AI=1`, step 2's LLM call is replaced by keyword rules ([`Ophia/mock_llm.py`](./Ophia/mock_llm.py)) and everything after it runs unchanged. See [Running without a Groq key](#running-without-a-groq-key).
+
+---
+
+## 👥 Team and Contributions
+Ophia was built by a team of four for UM Hackathon 2026. The core idea, an LLM that turns a doctor's note into hospital actions, and the first working pipeline came from the team:
+
+| Who | During the hackathon |
+|---|---|
+| [@fthanifa](https://github.com/fthanifa) | Ingestion gateway: OCR for photographed notes, audio transcription, and the first clinical notes page |
+| [@razinar05](https://github.com/razinar05) | The AI orchestrator (FastAPI service, LLM prompt and action execution) |
+| [@Rizwii](https://github.com/Rizwii) | The Mock EMR API and its Supabase integration |
+| [@hhkismail](https://github.com/hhkismail) (me) | The Supabase database design, then the final integration and fixes before submission |
+
+### What I've done since
+After the hackathon I kept working on it on my own, focusing on making it correct, safe and testable. Every change went through a pull request with the test suite running in CI:
+
+* **Made it work and made failures visible** ([#1](https://github.com/hhkismail/AI-Powered-Clinical-Workflow-Intelligence/pull/1), [#2](https://github.com/hhkismail/AI-Powered-Clinical-Workflow-Intelligence/pull/2), [#3](https://github.com/hhkismail/AI-Powered-Clinical-Workflow-Intelligence/pull/3)): removed fake success responses, fixed bed reservations end to end, moved to current Groq models, and made partial failures and safety halts show up instead of being swallowed.
+* **Tests, CI and an LLM eval** ([#3](https://github.com/hhkismail/AI-Powered-Clinical-Workflow-Intelligence/pull/3) onwards): 200+ pytest tests across all three services against an in-memory Supabase fake that rejects unknown columns (the bug class that broke the original demo), frontend rendering tests in QuickJS, a schema drift test, GitHub Actions on every push, and a clinical safety eval that runs fixed notes through the real model.
+* **Database design and security** ([#3](https://github.com/hhkismail/AI-Powered-Clinical-Workflow-Intelligence/pull/3), [#4](https://github.com/hhkismail/AI-Powered-Clinical-Workflow-Intelligence/pull/4), [#8](https://github.com/hhkismail/AI-Powered-Clinical-Workflow-Intelligence/pull/8)): a real schema with constraints, a fictional seed, versioned migrations with rollbacks, and row-level security on every table. After an API key leaked I rotated the keys and moved every service to a server-only secret key.
+* **The ward board** ([#4](https://github.com/hhkismail/AI-Powered-Clinical-Workflow-Intelligence/pull/4)–[#7](https://github.com/hhkismail/AI-Powered-Clinical-Workflow-Intelligence/pull/7), [#9](https://github.com/hhkismail/AI-Powered-Clinical-Workflow-Intelligence/pull/9)): a live 24-bed board fed only by processed notes, with acuity, IV-first medications, AI suggestions a clinician must accept (guarded against two clinicians deciding at once), discharge, bed turnover and a waiting list when no bed is free. I also redesigned both pages.
+* **Clinical safety logic** ([#10](https://github.com/hhkismail/AI-Powered-Clinical-Workflow-Intelligence/pull/10), [#11](https://github.com/hhkismail/AI-Powered-Clinical-Workflow-Intelligence/pull/11)): medication stops that only apply when the doctor's own words say so, and deterministic allergy rules, after the eval showed the LLM flip-flopping on a penicillin/meropenem case.
+* **Developer experience** ([#12](https://github.com/hhkismail/AI-Powered-Clinical-Workflow-Intelligence/pull/12)): one-command start and a mock AI mode, so the demo runs without a Groq key.
 
 ---
 
@@ -37,7 +83,7 @@ The following documents are located in the root directory for review:
 
 ### Prerequisites
 * Python 3.12
-* A [Groq API key](https://console.groq.com/keys)
+* A [Groq API key](https://console.groq.com/keys) (optional: see [Running without a Groq key](#running-without-a-groq-key))
 * A Supabase project (the free tier is fine)
 
 ### 1. Set up the database
@@ -74,15 +120,41 @@ SUPABASE_SECRET_KEY=your_supabase_secret_key
 # GROQ_CHAT_MODEL=openai/gpt-oss-120b
 # GROQ_VISION_MODEL=qwen/qwen3.8-27b
 
+# Optional: set to 1 to plan notes with keyword rules instead of the LLM (no Groq key needed)
+# MOCK_AI=1
+
 # Optional: set to 1 to enable the Flask debugger locally (never on a public URL)
 # FLASK_DEBUG=1
 ```
 
 ### 4. Launch
-Run each service from the repo root in its own terminal:
+One command starts all four services and shows their logs in one terminal (Ctrl+C stops them all):
+
+```bash
+python tools/start.py            # add --mock-ai to run without a Groq key, --open to open the browser
+```
+
+Then open http://localhost:5500 (clinical notes) or http://localhost:5500/board.html (ward board). It checks `.env` and the ports first and tells you what's missing.
+
+<details>
+<summary>Or run each service in its own terminal</summary>
 
 | Terminal | Service | Command |
 |---|---|---|
+| 1 | Mock EMR API (3001) | `python server.py` |
+| 2 | Orchestrator (8000) | `uvicorn main:app --app-dir Ophia --reload --port 8000` |
+| 3 | Ingestion (5000) | `python ingestion/ingestion.py` |
+| 4 | Frontend (5500) | `python -m http.server 5500 --directory frontend` |
+</details>
+
+Interactive API docs for the orchestrator are at http://localhost:8000/docs.
+
+### Running without a Groq key
+Set `MOCK_AI=1` in `.env` (or use `python tools/start.py --mock-ai`) and notes are planned by keyword rules in [`Ophia/mock_llm.py`](./Ophia/mock_llm.py) instead of the LLM. The allergy rules, the hospital APIs and the ward board all run for real, so you can try the whole flow without a key. Results are labelled *Mock AI mode* on the page, and every response carries `"ai": "mock"`.
+
+It's a stand-in, not a replacement: it only knows a list of common drugs and phrasing like the demo notes ("Admit to the observation ward", "Stop metoprolol", "Repeat chest x-ray"), and leaves out anything it doesn't recognise rather than guessing. It passes the same eight cases as the [safety eval](#-testing). There's no OCR or speech model without a key, so the only uploads it reads are the two files in [`docs/samples/`](./docs/samples/), using their stored transcripts. You still need a Supabase project for the database.
+
+---|---|---|
 | 1 | Mock EMR API (3001) | `python server.py` |
 | 2 | Orchestrator (8000) | `uvicorn main:app --app-dir Ophia --reload --port 8000` |
 | 3 | Ingestion (5000) | `python ingestion/ingestion.py` |
