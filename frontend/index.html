@@ -6,9 +6,15 @@
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <header>
-    <h1>ClinicalAI Dashboard</h1>
-    <p>Upload or type doctor notes for AI-powered clinical structuring</p>
+  <header class="page-header">
+    <div>
+      <h1>ClinicalAI Dashboard</h1>
+      <p>Upload or type doctor notes for AI-powered clinical structuring</p>
+    </div>
+    <nav>
+      <a href="index.html" aria-current="page">Clinical notes</a>
+      <a href="board.html">Ward board</a>
+    </nav>
   </header>
 
   <main>
@@ -49,7 +55,7 @@
       </div>
 
       <div class="drop-zone">
-        <p>Upload handwritten note or voice memo (optional — requires Z.AI)</p>
+        <p>Upload handwritten note or voice memo (optional — requires a Groq API key)</p>
         <input type="file" id="file-input" accept=".jpg,.jpeg,.png,.mp3,.wav,.m4a">
         <label for="file-input" class="btn">Choose File</label>
         <p id="file-name" class="file-name">No file selected</p>

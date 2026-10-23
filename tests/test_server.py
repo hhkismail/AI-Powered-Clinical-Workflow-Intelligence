@@ -57,6 +57,30 @@ def test_reserve_bed_of_a_different_type_is_a_transfer(client, fake_db):
     assert (old_bed["status"], old_bed["assigned_to_patient"]) == ("cleaning", None)
 
 
+def test_observation_request_prefers_an_observation_bed(client, fake_db):
+    # A general bed listed first must not win over the observation bed
+    fake_db.tables["hospital_resources"].insert(0, {
+        "id": "RES-EMG-01", "resource_name": "Triage Bay 02", "resource_type": "GEN_WARD",
+        "wing": "Triage Wing", "status": "available", "assigned_to_patient": None})
+
+    observation = client.post("/api/reserve-bed", json={"patient_id": "PT-30554", "ward_type": "observation"}).get_json()
+    general = client.post("/api/reserve-bed", json={"patient_id": "PT-40992", "ward_type": "general"}).get_json()
+
+    assert observation["reservation_id"] == "RES-NEURO-01"
+    assert general["reservation_id"] == "RES-EMG-01"
+
+
+def test_observation_request_falls_back_to_any_general_bed(client, fake_db):
+    bed(fake_db, "RES-NEURO-01")["status"] = "maintenance"
+    fake_db.tables["hospital_resources"].append({
+        "id": "RES-EMG-01", "resource_name": "Triage Bay 02", "resource_type": "GEN_WARD",
+        "wing": "Triage Wing", "status": "available", "assigned_to_patient": None})
+
+    resp = client.post("/api/reserve-bed", json={"patient_id": "PT-30554", "ward_type": "observation"}).get_json()
+
+    assert resp["reservation_id"] == "RES-EMG-01"
+
+
 @pytest.mark.parametrize("ward_type", ["cardiology", "diagnostic", ""])
 def test_reserve_bed_rejects_unknown_ward_type(client, ward_type):
     resp = client.post("/api/reserve-bed", json={"patient_id": "PT-30554", "ward_type": ward_type})
