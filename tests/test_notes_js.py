@@ -106,3 +106,23 @@ def test_result_escapes_llm_text(js):
     html = js("renderResult", evil)
 
     assert "<script>" not in html and "<img" not in html
+
+
+def test_queued_admission_is_pending_not_failed(js):
+    queued = json.loads(json.dumps(SUCCESS))
+    queued["result"]["execution_results"]["executed_actions"][1]["result"] = {
+        "status": "queued", "request_id": "r1", "waiting_for": "icu", "position": 2}
+
+    html = js("renderResult", queued)
+
+    assert '<span class="pending">●</span><span>No ICU bed free: added to the waiting list (position 2)</span>' in html
+    assert 'href="board.html#waiting=r1"' in html
+    assert "Open on the ward board" not in html
+
+
+def test_context_shows_waiting_for_a_bed(js):
+    waiting = {**PATIENT, "bed": None, "waiting_for_bed": {"id": "r1", "ward_type": "icu"}}
+    transfer = {**PATIENT, "waiting_for_bed": {"id": "r2", "ward_type": "icu"}}
+
+    assert 'href="board.html#waiting=r1">Waiting for an ICU bed</a>' in js("renderContext", waiting)
+    assert "Waiting for a transfer to an ICU bed" in js("renderContext", transfer)

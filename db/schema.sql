@@ -91,7 +91,29 @@ create index if not exists medication_orders_active_by_patient
 create index if not exists care_tasks_open_by_patient
     on public.care_tasks (patient_id) where status in ('suggested', 'accepted');
 
--- ----- Access (migrations 001 and 003) -----
+-- ----- Waiting list (added in migrations/004_bed_requests.sql) -----
+
+-- Admissions that couldn't get a suitable bed. Listed on the ward board,
+-- sickest first, until a clinician assigns a bed or removes the request.
+create table if not exists public.bed_requests (
+    id              uuid primary key default gen_random_uuid(),
+    patient_id      text not null references public.patients (patient_id),
+    ward_type       text not null check (ward_type in ('icu', 'observation', 'general')),
+    resource_type   text not null check (resource_type in ('ICU_BED', 'GEN_WARD')),
+    department      text,                                 -- from the note; preferred when assigning
+    clinical_reason text,
+    status          text not null default 'waiting' check (status in ('waiting', 'assigned', 'cancelled')),
+    requested_at    timestamptz not null default now(),
+    resolved_at     timestamptz,                          -- when assigned or cancelled
+    resolved_by     text,                                 -- clinician ID, or 'system' for a new note
+    assigned_bed_id text references public.hospital_resources (id)
+);
+
+-- At most one open request per patient, even if two notes arrive at once
+create unique index if not exists bed_requests_one_waiting_per_patient
+    on public.bed_requests (patient_id) where status = 'waiting';
+
+-- ----- Access (migrations 001, 003 and 004) -----
 -- Row-level security on every table with no policies: only the server-side
 -- secret key can read or write. The publishable key sees nothing.
 alter table public.patients enable row level security;
@@ -100,3 +122,4 @@ alter table public.clinical_notes enable row level security;
 alter table public.appointments enable row level security;
 alter table public.medication_orders enable row level security;
 alter table public.care_tasks enable row level security;
+alter table public.bed_requests enable row level security;

@@ -121,13 +121,14 @@ def test_reserve_bed_rejects_unknown_ward_type(client, ward_type):
     assert resp.get_json()["error_code"] == "INVALID_WARD_TYPE"
 
 
-def test_reserve_bed_reports_no_beds_when_ward_is_full(client, fake_db):
-    bed(fake_db, "RES-ICU-01")["status"] = "occupied"
+def test_reserve_bed_queues_the_patient_when_ward_is_full(client, fake_db):
+    bed(fake_db, "RES-ICU-01")["status"] = "maintenance"
 
     resp = client.post("/api/reserve-bed", json={"patient_id": "PT-30554", "ward_type": "icu"})
 
-    assert resp.status_code == 400
-    assert resp.get_json()["error_code"] == "NO_BEDS_AVAILABLE"
+    # Not rejected: the admission joins the waiting list (more in test_waiting_list.py)
+    assert resp.status_code == 202
+    assert resp.get_json()["status"] == "queued"
 
 
 def test_reserve_bed_requires_patient_and_ward(client):
