@@ -16,7 +16,7 @@ OPHIA is a hackathon prototype of an AI clinical workflow orchestrator. It takes
 OPHIA runs as four small services:
 
 1.  **Ingestion Engine (Port 5000):** Flask-based gateway for multimodal data (OCR/Audio ingestion).
-2.  **The Orchestrator (Port 8000):** FastAPI "Brain" powered by **Groq (Llama-3.3-70b)** for clinical reasoning.
+2.  **The Orchestrator (Port 8000):** FastAPI "Brain" powered by **Groq (`openai/gpt-oss-120b`)** for clinical reasoning. Image notes are read with `qwen/qwen3.8-27b` and audio with `whisper-large-v3`.
 3.  **Mock EMR API (Port 3001):** The execution layer that routes AI commands to **Supabase** persistence.
 4.  **Clinical Dashboard (Port 5500):** A real-time visualization layer built with Vanilla JS for zero-dependency execution.
 
@@ -64,6 +64,10 @@ SUPABASE_KEY=your_supabase_anon_key
 # Same Supabase project, used by the orchestrator for patient-history lookups
 ISMA_DB_URL=your_supabase_url
 ISMA_ANON_KEY=your_supabase_anon_key
+
+# Optional: override the Groq models if Groq retires one (see https://console.groq.com/docs/deprecations)
+# GROQ_CHAT_MODEL=openai/gpt-oss-120b
+# GROQ_VISION_MODEL=qwen/qwen3.8-27b
 
 # Optional: set to 1 to enable the Flask debugger locally (never on a public URL)
 # FLASK_DEBUG=1

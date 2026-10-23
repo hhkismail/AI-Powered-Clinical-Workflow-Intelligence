@@ -13,6 +13,8 @@ CORS(app)  # allows your browser dashboard to call this
 ZAI_API_KEY   = os.getenv("ZAI_API_KEY")
 RAZIN_URL = "http://127.0.0.1:8000/api/process-note"
 TIMEOUT       = int(os.getenv("TIMEOUT_SECONDS", 30))
+# Only image-capable model on Groq at the moment (preview, so it may be busy or retired)
+GROQ_VISION_MODEL = os.getenv("GROQ_VISION_MODEL", "qwen/qwen3.8-27b")
 
 # ── Set True while api.ilmu.ai is down, False once it's back ──
 ZAI_DOWN = False
@@ -40,7 +42,7 @@ def ocr_image(image_path: str) -> str:
     
     # Using Groq's Vision model to read the handwriting/text
     payload = {
-        "model": "llama-3.2-11b-vision-preview",
+        "model": GROQ_VISION_MODEL,
         "messages": [
             {
                 "role": "user",

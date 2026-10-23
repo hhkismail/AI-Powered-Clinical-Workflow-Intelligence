@@ -91,6 +91,8 @@ class MockAPIErrorResponse(BaseModel):
 
 MOCK_API_BASE_URL = os.getenv("MOCK_API_BASE_URL", "http://127.0.0.1:3001")
 TIMEOUT_SECONDS = 60
+# Groq retires models regularly; override in .env without touching code
+GROQ_CHAT_MODEL = os.getenv("GROQ_CHAT_MODEL", "openai/gpt-oss-120b")
 
 # LLM System Prompt - exact as specified
 SYSTEM_PROMPT = """You are an elite Chief Medical Officer AI and autonomous workflow orchestrator. 
@@ -110,7 +112,7 @@ import httpx
 import json
 
 async def call_zai_glm(text: str) -> dict:
-    """Calls the Groq Llama-3 model for lightning-fast JSON extraction."""
+    """Calls the Groq chat model (GROQ_CHAT_MODEL) for JSON extraction and action planning."""
     api_key = os.getenv("ZAI_API_KEY") 
     
     # 1. NEW URL FOR GROQ
@@ -134,6 +136,8 @@ Output MUST be pure JSON.
 # OPERATING RULES
 1. DRUG SAFETY: If an allergy conflict (e.g., Aspirin/NSAID) is detected, you MUST return "status": "halted_for_clarification".
 2. ADMISSION LOGIC: If a patient is in respiratory failure or needs life support, you MUST use the 'reserve_bed' tool with ward_type='icu'.
+   If the note says to admit the patient to any other ward (e.g. observation or general), you MUST use 'reserve_bed' with ward_type='observation' or 'general'.
+   Rule 1 always takes priority: if any prescription conflicts with a known allergy, halt instead of admitting.
 3. DATA FORMAT: Prescriptions MUST be objects with 'drug', 'dosage', and 'route' keys.
 
 # AVAILABLE TOOLS
@@ -154,8 +158,7 @@ Output ONLY valid JSON:
 }"""
 
     payload = {
-        # 2. NEW MODEL FOR GROQ (Llama 3 70B is incredibly smart and fast)
-        "model": "llama-3.3-70b-versatile",
+        "model": GROQ_CHAT_MODEL,
         "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": text}
