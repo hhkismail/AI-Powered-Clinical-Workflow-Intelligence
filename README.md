@@ -5,6 +5,8 @@
 
 OPHIA is a hackathon prototype of an AI clinical workflow orchestrator. It takes an unstructured clinical note (typed, photographed or dictated), uses an LLM to extract diagnoses and prescriptions, and turns them into hospital actions such as updating the patient record, reserving a bed or scheduling a follow-up. It's a demo and is not meant for clinical use.
 
+**▶ [Try the live demo](https://ai-powered-clinical-workflow-intell.vercel.app/)**: open the [ward board](https://ai-powered-clinical-workflow-intell.vercel.app/board.html), or write a note for patient `PT-30554` on the notes page (any clinician ID works). All patients are fictional. The demo resets every night, and when its shared AI budget is busy, notes are planned by keyword rules instead and labelled as such ([how it's hosted](#-deploying-to-vercel)).
+
 ---
 
 ## 🎥 Project Demo & Presentation
