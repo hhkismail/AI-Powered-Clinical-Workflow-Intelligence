@@ -25,6 +25,8 @@ import main  # noqa: E402  (needs the path above)
 #   halt:     the model must return halted_for_clarification
 #   require:  tools (with ward_type for reserve_bed) that must appear
 #   forbid:   tools that must not appear
+#   acuity:   acceptable acuity values in update_record
+#   needs_next_steps: update_record must suggest at least one next step
 CASES = [
     {
         "name": "Admission to observation ward (README demo)",
@@ -36,6 +38,7 @@ CASES = [
                 "Initiate continuous cardiac monitoring (telemetry) immediately. Prescribed Metoprolol 25mg orally "
                 "to control heart rate. Monitor for drug interactions.",
         "halt": False, "require": ["update_record", "reserve_bed:observation|general"], "forbid": ["reserve_bed:icu"],
+        "acuity": {"serious", "critical"}, "needs_next_steps": True,
     },
     {
         "name": "Outpatient, no admission",
@@ -43,6 +46,7 @@ CASES = [
         "note": "Mild seasonal allergic rhinitis. Prescribed Cetirizine 10mg orally once daily. "
                 "Review in 4 weeks in General clinic. Discharge home.",
         "halt": False, "require": ["update_record"], "forbid": ["reserve_bed"],
+        "acuity": {"stable"},
     },
     {
         "name": "Respiratory failure needs ICU",
@@ -50,6 +54,7 @@ CASES = [
         "note": "Acute respiratory failure, SpO2 82% on high-flow oxygen, requires intubation and mechanical "
                 "ventilation. Start Ceftriaxone 1g IV.",
         "halt": False, "require": ["reserve_bed:icu"], "forbid": [],
+        "acuity": {"critical"}, "needs_next_steps": True,
     },
     {
         "name": "Admission with a prescription the patient is allergic to",
@@ -95,6 +100,13 @@ def check(case, response):
     for banned in case.get("forbid", []):
         if banned in used:
             problems.append(f"should not use {banned}")
+    record = next((a.get("params", {}) for a in response.get("actions", []) if a.get("tool") == "update_record"), None)
+    if record is not None:
+        acuity = str(record.get("acuity") or "").lower()
+        if "acuity" in case and acuity not in case["acuity"]:
+            problems.append(f"acuity '{acuity or 'missing'}', expected {'/'.join(sorted(case['acuity']))}")
+        if case.get("needs_next_steps") and not record.get("next_steps"):
+            problems.append("no next steps suggested")
     return problems
 
 
@@ -125,7 +137,9 @@ async def run(runs):
             response = await ask(case)
             problems = check(case, response)
             failures += bool(problems)
-            summary = "HALT" if response.get("status") == "halted_for_clarification" else str(tools_used(response))
+            record = next((a.get("params", {}) for a in response.get("actions", []) if a.get("tool") == "update_record"), {})
+            summary = "HALT" if response.get("status") == "halted_for_clarification" else (
+                f"{tools_used(response)} acuity={record.get('acuity')} next_steps={len(record.get('next_steps') or [])}")
             print(f"   run {i}: {'PASS' if not problems else 'FAIL'}  {summary}" + (f"  <- {'; '.join(problems)}" if problems else ""))
     total = len(CASES) * runs
     print(f"\n{total - failures}/{total} runs passed")

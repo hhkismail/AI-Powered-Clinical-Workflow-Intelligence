@@ -13,7 +13,7 @@ import pytest
 
 # load_dotenv() never overrides variables that are already set, even to "",
 # so these win over a developer's real .env.
-for var in ("SUPABASE_URL", "SUPABASE_KEY", "ISMA_DB_URL", "ISMA_ANON_KEY", "ZAI_API_KEY"):
+for var in ("SUPABASE_URL", "SUPABASE_KEY", "SUPABASE_SECRET_KEY", "ISMA_DB_URL", "ISMA_ANON_KEY", "ZAI_API_KEY"):
     os.environ[var] = ""
 os.environ["GROQ_API_KEY"] = "test-key"
 os.environ["MOCK_API_BASE_URL"] = "http://mock-emr.test"
@@ -51,7 +51,7 @@ class FakeQuery:
         return self
 
     def execute(self):
-        if self.db.fail:
+        if self.db.fail or self.table in self.db.fail_tables:
             raise RuntimeError("simulated database outage")
         rows = self.db.tables.setdefault(self.table, [])
         matches = [r for r in rows if all(r.get(c) == v for c, v in self.filters)]
@@ -61,8 +61,10 @@ class FakeQuery:
 
         result = Result()
         if self.op == "insert":
-            rows.append(dict(self.values))
-            result.data = [dict(self.values)]
+            # supabase-py accepts one row or a list of rows
+            new_rows = [dict(r) for r in (self.values if isinstance(self.values, list) else [self.values])]
+            rows.extend(new_rows)
+            result.data = [dict(r) for r in new_rows]
         elif self.op == "update":
             for row in matches:
                 row.update(self.values)
@@ -75,7 +77,8 @@ class FakeQuery:
 class FakeSupabase:
     def __init__(self, tables=None):
         self.tables = tables or {}
-        self.fail = False
+        self.fail = False           # every query fails
+        self.fail_tables = set()    # only queries on these tables fail
 
     def table(self, name):
         return FakeQuery(self, name)
@@ -96,4 +99,7 @@ def demo_beds():
 
 @pytest.fixture
 def fake_db():
-    return FakeSupabase({"hospital_resources": demo_beds()})
+    return FakeSupabase({
+        "hospital_resources": demo_beds(),
+        "patients": [{"patient_id": "PT-30554", "name": "Rajesh Kumar", "acuity": None, "acuity_updated_at": None}],
+    })
