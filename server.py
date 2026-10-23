@@ -13,8 +13,81 @@ CORS(app)
 
 load_dotenv()
 supabase_url = os.getenv("SUPABASE_URL")
-supabase_key = os.getenv("SUPABASE_KEY")
+def server_supabase_key():
+    """Server-side, so prefer the secret key: the ward board tables have row-level
+    security that blocks the publishable key. Falls back for older .env files."""
+    return os.getenv("SUPABASE_SECRET_KEY") or os.getenv("SUPABASE_KEY")
+
+
+supabase_key = server_supabase_key()
 supabase = create_client(supabase_url, supabase_key) if supabase_url and supabase_key else None
+
+# Free-text routes and categories from the LLM, mapped to the values the
+# medication_orders / care_tasks check constraints allow
+ROUTE_ALIASES = {
+    'oral': 'oral', 'orally': 'oral', 'po': 'oral', 'by mouth': 'oral',
+    'iv': 'iv', 'intravenous': 'iv', 'intravenously': 'iv', 'iv infusion': 'iv', 'iv drip': 'iv', 'iv push': 'iv',
+    'im': 'im', 'intramuscular': 'im', 'intramuscularly': 'im',
+    'sc': 'subcutaneous', 'sq': 'subcutaneous', 'subcut': 'subcutaneous', 'subcutaneous': 'subcutaneous',
+    'inhaled': 'inhaled', 'inhalation': 'inhaled', 'nebulised': 'inhaled', 'nebulized': 'inhaled',
+    'topical': 'topical', 'topically': 'topical'
+}
+TASK_CATEGORIES = {'prep', 'monitoring', 'lab', 'imaging', 'consult', 'medication', 'other'}
+ACUITY_LEVELS = {'critical', 'serious', 'stable'}
+
+
+def normalize_route(route):
+    if not route:
+        return None
+    return ROUTE_ALIASES.get(str(route).strip().lower(), 'other')
+
+
+def medication_key(order):
+    """Identity of a medication order for de-duplication: drug, dose and route."""
+    normalize = lambda v: ' '.join(str(v or '').lower().split())
+    return normalize(order.get('drug')), normalize(order.get('dose')).replace(' ', ''), order.get('route')
+
+
+def task_key(task):
+    """Identity of a care task for de-duplication: its description, ignoring case and spacing."""
+    return ' '.join(str(task.get('description') or '').lower().split()).rstrip('.')
+
+
+def medication_order_rows(patient_id, prescriptions, note_id):
+    rows = []
+    for rx in prescriptions or []:
+        rx = rx if isinstance(rx, dict) else {'drug': str(rx)}
+        drug = rx.get('drug') or rx.get('medication') or rx.get('name')
+        if not drug:
+            continue
+        rows.append({
+            'patient_id': patient_id,
+            'drug': str(drug),
+            'dose': rx.get('dosage') or rx.get('dose'),
+            'route': normalize_route(rx.get('route')),
+            'frequency': rx.get('frequency'),
+            'status': 'active',
+            'source_note_id': note_id
+        })
+    return rows
+
+
+def care_task_rows(patient_id, next_steps, note_id):
+    rows = []
+    for step in next_steps or []:
+        step = step if isinstance(step, dict) else {'description': str(step)}
+        if not step.get('description'):
+            continue
+        category = str(step.get('category') or 'other').strip().lower()
+        rows.append({
+            'patient_id': patient_id,
+            'description': str(step['description']),
+            'category': category if category in TASK_CATEGORIES else 'other',
+            'status': 'suggested',      # a clinician has to accept it on the ward board
+            'suggested_by': 'ai',
+            'source_note_id': note_id
+        })
+    return rows
 
 
 def missing_parameter_response(message):
@@ -75,6 +148,26 @@ def reserve_bed():
         }), 400
 
     try:
+        # A patient holds one bed. Asking again for the same kind of bed (e.g. a
+        # follow-up note) returns the current one; a different kind is a transfer.
+        current_beds = (
+            supabase.table('hospital_resources')
+            .select('id, resource_name, wing, resource_type, status')
+            .eq('assigned_to_patient', patient_id)
+            .eq('status', 'occupied')
+            .execute()
+        ).data or []
+        same_type = [b for b in current_beds if b['resource_type'] == mapped_resource_type]
+        if same_type:
+            bed = same_type[0]
+            return jsonify({
+                "status": "success",
+                "reservation_id": bed['id'],
+                "allocation": {"ward": bed.get('wing'), "bed": bed.get('resource_name'), "status": "occupied"},
+                "already_assigned": True,
+                "message": "The patient already has a bed of this type; no new bed was reserved."
+            }), 200
+
         bed_result = (
             supabase.table('hospital_resources')
             .select('id, resource_name, wing, resource_type, status')
@@ -112,6 +205,12 @@ def reserve_bed():
 
         updated_bed = updated_rows[0]
 
+        # Transfer: free the patient's previous bed. It needs cleaning before reuse.
+        for old_bed in current_beds:
+            supabase.table('hospital_resources') \
+                .update({'status': 'cleaning', 'assigned_to_patient': None}) \
+                .eq('id', old_bed['id']).execute()
+
         return jsonify({
             "status": "success",
             "reservation_id": updated_bed['id'],
@@ -120,7 +219,8 @@ def reserve_bed():
                 "bed": updated_bed.get('resource_name'),
                 "status": updated_bed.get('status', 'occupied')
             },
-            "message": "Bed reserved successfully."
+            "transferred_from": [b['id'] for b in current_beds] or None,
+            "message": "Bed reserved successfully." + (" Previous bed released for cleaning." if current_beds else "")
         }), 200
     except Exception as e:
         print(f"[reserve-bed] Supabase error: {e}")
@@ -192,16 +292,26 @@ def update_record():
     if supabase is None:
         return supabase_unavailable_response()
 
+    patient_id = data['patient_id']
+    acuity = str(data.get('acuity') or '').strip().lower() or None
+    if acuity is not None and acuity not in ACUITY_LEVELS:
+        acuity = None
+
     structured_data = {
         'diagnoses': data.get('diagnoses', []),
-        'prescriptions': data.get('prescriptions', [])
+        'prescriptions': data.get('prescriptions', []),
+        'acuity': acuity,
+        'next_steps': data.get('next_steps', []),
+        # Kept for the audit trail: why the AI chose these actions
+        'reasoning': data.get('reasoning')
     }
     record_id = str(uuid.uuid4())
 
     try:
         supabase.table('clinical_notes').insert({
             'id': record_id,
-            'patient_id': data['patient_id'],
+            'patient_id': patient_id,
+            'raw_input': data.get('raw_input'),
             # Stored as a JSON object (jsonb), not a JSON-encoded string
             'structured_data': structured_data
         }).execute()
@@ -209,12 +319,51 @@ def update_record():
         print(f"[update-record] Supabase error: {e}")
         return supabase_query_failed_response("Unable to save the clinical note to the database.")
 
+    # Ward board data. The note is already saved, so a failure here is
+    # reported as partial rather than silently dropped.
+    medications = medication_order_rows(patient_id, data.get('prescriptions'), record_id)
+    tasks = care_task_rows(patient_id, data.get('next_steps'), record_id)
+    try:
+        # A follow-up note often repeats current prescriptions and plans;
+        # don't duplicate active orders or tasks that are still open
+        active = supabase.table('medication_orders').select('drug, dose, route') \
+            .eq('patient_id', patient_id).eq('status', 'active').execute().data or []
+        active_keys = {medication_key(m) for m in active}
+        medications = [m for m in medications if medication_key(m) not in active_keys]
+
+        open_tasks = [t for status in ('suggested', 'accepted') for t in (
+            supabase.table('care_tasks').select('description')
+            .eq('patient_id', patient_id).eq('status', status).execute().data or [])]
+        seen = {task_key(t) for t in open_tasks}
+        unique_tasks = []
+        for t in tasks:
+            if task_key(t) not in seen:
+                seen.add(task_key(t))     # also drops repeats within the same note
+                unique_tasks.append(t)
+        tasks = unique_tasks
+
+        if medications:
+            supabase.table('medication_orders').insert(medications).execute()
+        if tasks:
+            supabase.table('care_tasks').insert(tasks).execute()
+        if acuity:
+            supabase.table('patients').update({
+                'acuity': acuity,
+                'acuity_updated_at': datetime.now(timezone.utc).isoformat()
+            }).eq('patient_id', patient_id).execute()
+    except Exception as e:
+        print(f"[update-record] Supabase error writing ward board data: {e}")
+        return supabase_query_failed_response(
+            f"Clinical note {record_id} was saved, but its medications, tasks or acuity could not be.")
+
     # The frontend reads the extracted diagnoses/prescriptions back from 'params'
     return jsonify({
         "status": "success",
         "record_id": record_id,
         "message": "Patient EMR successfully updated.",
-        "params": structured_data  
+        "params": structured_data,
+        "medication_orders_created": len(medications),
+        "care_tasks_suggested": len(tasks)
     }), 200
 
 # 4. Fetch Patient Profile (Read)

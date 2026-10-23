@@ -65,6 +65,9 @@ MOCK_API_BASE_URL=http://127.0.0.1:3001
 # Supabase project URL and publishable key (Project Settings -> API Keys), used by server.py
 SUPABASE_URL=your_supabase_url
 SUPABASE_KEY=your_supabase_publishable_key
+# Secret key (sb_secret_...), server-side only. Required for the ward board tables,
+# which have row-level security that blocks the publishable key
+SUPABASE_SECRET_KEY=your_supabase_secret_key
 
 # Same Supabase project, used by the orchestrator for patient-history lookups
 ISMA_DB_URL=your_supabase_url
@@ -110,7 +113,8 @@ The **OPHIA** Execution Loop:
 Every run reserves a bed, so free them again between demos:
 
 ```bash
-python tools/reset_demo.py            # add --dry-run to preview
+python tools/reset_demo.py                 # free the beds (add --dry-run to preview)
+python tools/reset_demo.py --clear-board   # also clear medications, tasks and acuity
 ```
 
 ---
@@ -133,7 +137,9 @@ python evals/run_safety_eval.py --runs 3
 ## 🛡️ Safety Behaviour (and Current Limits)
 * **Allergy checks:** The patient's known allergies and active prescriptions are included in the LLM prompt, and the model is instructed to halt on a conflict. This check is done by the LLM, not by a deterministic rule.
 * **Halting:** If the LLM halts, the request returns `halted_for_clarification` and nothing is executed. If some actions succeed and others are rejected or fail (e.g. the record is saved but no bed is free), the request returns `partial_success`. The dashboard then lists exactly which actions failed; earlier actions aren't rolled back.
-* **Persistence:** Extracted diagnoses and prescriptions are saved to `clinical_notes`. The LLM's reasoning isn't stored yet, so there is no audit trail.
+* **Audit trail:** Each processed note is saved to `clinical_notes` with the original text, the extracted diagnoses and prescriptions, and the LLM's reasoning for its actions.
+* **Ward board data:** Prescriptions become `medication_orders` (routes normalised, e.g. "orally" → `oral`, "IV drip" → `iv`), the patient's acuity is updated, and next steps become `care_tasks` with status `suggested`. AI suggestions aren't real tasks until a clinician accepts them. Repeated notes don't duplicate active medications, open tasks or beds. Asking for a different kind of bed is a transfer, and the old bed is released for cleaning.
+* **Rate limits:** On Groq's free tier (8,000 tokens per minute) the orchestrator handles about five notes a minute. Beyond that, requests halt with an `AI Gateway Error` and can simply be retried.
 * **No authentication:** The APIs have no auth and accept requests from any origin. Run them locally only.
 
 ---

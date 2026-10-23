@@ -162,20 +162,26 @@ Output MUST be pure JSON.
 2. ADMISSION LOGIC: If a patient is in respiratory failure or needs life support, you MUST use the 'reserve_bed' tool with ward_type='icu'.
    If the note says to admit the patient to any other ward (e.g. observation or general), you MUST use 'reserve_bed' with ward_type='observation' or 'general'.
    Rule 1 always takes priority: if any prescription conflicts with a known allergy, halt instead of admitting.
-3. DATA FORMAT: Prescriptions MUST be objects with 'drug', 'dosage', and 'route' keys.
+3. DATA FORMAT: Prescriptions MUST be objects with 'drug', 'dosage', 'route' and 'frequency' keys (frequency may be null if the note doesn't say).
+4. ACUITY: In 'update_record', set 'acuity' to exactly one of:
+   'critical' - life-threatening or needs ICU / life support;
+   'serious'  - needs admission or close monitoring;
+   'stable'   - can be managed as an outpatient or routine follow-up.
+5. NEXT STEPS: In 'update_record', list the concrete next steps the note calls for (e.g. telemetry monitoring, labs, imaging, procedure prep, consults) as 'next_steps', each with a 'description' and a 'category' of 'prep', 'monitoring', 'lab', 'imaging', 'consult', 'medication' or 'other'.
+   Only include steps the note states or directly implies; never invent new treatments. These are suggestions a clinician must approve.
 
 # AVAILABLE TOOLS
-- 'update_record': (patient_id, diagnoses, prescriptions)
+- 'update_record': (patient_id, diagnoses, prescriptions, acuity, next_steps)
 - 'reserve_bed': (patient_id, ward_type, clinical_reason)
-- 'schedule_appointment': (patient_id, department, appointment_date, reason)
+- 'schedule_appointment': (patient_id, department, appointment_date (YYYY-MM-DD) or timeframe_days, reason)
 
 # OUTPUT SCHEMA
 Output ONLY valid JSON:
 {
-    "status": "success", 
+    "status": "success",
     "reasoning": "Explain your decision.",
     "actions": [
-        {"tool": "update_record", "params": {"patient_id": "...", "diagnoses": ["..."], "prescriptions": [{"drug": "...", "dosage": "...", "route": "..."}]}},
+        {"tool": "update_record", "params": {"patient_id": "...", "diagnoses": ["..."], "prescriptions": [{"drug": "...", "dosage": "...", "route": "...", "frequency": "..."}], "acuity": "serious", "next_steps": [{"description": "...", "category": "monitoring"}]}},
         {"tool": "reserve_bed", "params": {"patient_id": "...", "ward_type": "icu", "clinical_reason": "..."}}
     ],
     "system_alerts": []
@@ -370,17 +376,25 @@ def update_record(
     patient_id: str,
     encounter_date: str,
     diagnoses: List[str],
-    prescriptions: List[str]
+    prescriptions: List[Any],
+    acuity: Optional[str] = None,
+    next_steps: Optional[List[Any]] = None,
+    raw_input: Optional[str] = None,
+    reasoning: Optional[str] = None
 ) -> Dict[str, Any]:
     """
     Call mock API to update patient medical record.
-    
+
     Args:
         patient_id: Patient identifier
         encounter_date: Date of encounter
         diagnoses: List of diagnoses
-        prescriptions: List of prescriptions
-        
+        prescriptions: List of prescriptions (become medication orders)
+        acuity: critical / serious / stable
+        next_steps: Suggested care tasks for a clinician to approve
+        raw_input: The original note text, kept for the audit trail
+        reasoning: The LLM's explanation, kept for the audit trail
+
     Returns:
         API response
     """
@@ -388,7 +402,11 @@ def update_record(
         "patient_id": patient_id,
         "encounter_date": encounter_date,
         "diagnoses": diagnoses,
-        "prescriptions": prescriptions
+        "prescriptions": prescriptions,
+        "acuity": acuity,
+        "next_steps": next_steps or [],
+        "raw_input": raw_input,
+        "reasoning": reasoning
     }
     return call_mock_api("/api/update-record", data)
 
@@ -397,7 +415,12 @@ def update_record(
 # TOOL EXECUTION
 # ========================
 
-def execute_llm_actions(actions: List[Dict[str, Any]], patient_id: str) -> Dict[str, Any]:
+def execute_llm_actions(
+    actions: List[Dict[str, Any]],
+    patient_id: str,
+    raw_text: Optional[str] = None,
+    reasoning: Optional[str] = None
+) -> Dict[str, Any]:
     """
     Execute actions returned by the LLM.
 
@@ -454,7 +477,12 @@ def execute_llm_actions(actions: List[Dict[str, Any]], patient_id: str) -> Dict[
                     patient_id=params.get("patient_id", patient_id),
                     encounter_date=params.get("encounter_date"),
                     diagnoses=params.get("diagnoses", []),
-                    prescriptions=params.get("prescriptions", [])
+                    prescriptions=params.get("prescriptions", []),
+                    acuity=params.get("acuity"),
+                    next_steps=params.get("next_steps", []),
+                    # From the request and the LLM response, not the LLM's params
+                    raw_input=raw_text,
+                    reasoning=reasoning
                 )
                 results["executed_actions"].append({
                     "tool": tool_name,
@@ -561,7 +589,9 @@ async def process_note(request: ProcessNoteRequest) -> ProcessNoteResponse:
         if actions:
             print(f"[ORCHESTRATOR] Executing {len(actions)} actions from LLM...")
             # The hospital API calls are blocking; keep them off the event loop
-            execution_results = await run_in_threadpool(execute_llm_actions, actions, patient_id)
+            execution_results = await run_in_threadpool(
+                execute_llm_actions, actions, patient_id, raw_text, llm_response.get("reasoning")
+            )
             executed = execution_results["executed_actions"]
             alerts = execution_results["alerts"]
 

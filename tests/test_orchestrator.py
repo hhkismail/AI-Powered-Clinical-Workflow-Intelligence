@@ -125,6 +125,25 @@ def test_prompt_includes_history_and_note(client, mock_apis):
     assert "Metoprolol 25mg PO" in prompt
 
 
+def test_update_record_receives_ward_board_fields_and_audit_trail(client, monkeypatch, mock_apis):
+    sent = {}
+    monkeypatch.setattr(main, "call_mock_api", lambda endpoint, data: sent.update({endpoint: data}) or {"status": "success"})
+    mock_apis["llm"] = {"status": "success", "reasoning": "AF needs monitored admission", "actions": [{
+        "tool": "update_record", "params": {
+            "diagnoses": ["AF"], "prescriptions": [], "acuity": "serious",
+            "next_steps": [{"description": "Telemetry", "category": "monitoring"}],
+            # The LLM can't overwrite the audit trail with its own params
+            "raw_input": "forged", "reasoning": "forged"}}]}
+
+    client.post("/api/process-note", json=NOTE_REQUEST)
+
+    data = sent["/api/update-record"]
+    assert data["acuity"] == "serious"
+    assert data["next_steps"] == [{"description": "Telemetry", "category": "monitoring"}]
+    assert data["raw_input"] == NOTE_REQUEST["payload"]["raw_text"]
+    assert data["reasoning"] == "AF needs monitored admission"
+
+
 def test_missing_patient_id_is_rejected_by_validation(client, mock_apis):
     bad = {**NOTE_REQUEST, "metadata": {k: v for k, v in NOTE_REQUEST["metadata"].items() if k != "patient_id"}}
 
