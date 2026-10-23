@@ -1,0 +1,99 @@
+"""
+Shared test setup.
+
+The services read credentials from .env at import time, so the environment is
+blanked *before* they are imported. Tests never reach Supabase or Groq: the
+database is replaced with FakeSupabase and outbound HTTP calls are patched.
+"""
+
+import os
+import sys
+
+import pytest
+
+# load_dotenv() never overrides variables that are already set, even to "",
+# so these win over a developer's real .env.
+for var in ("SUPABASE_URL", "SUPABASE_KEY", "ISMA_DB_URL", "ISMA_ANON_KEY", "ZAI_API_KEY"):
+    os.environ[var] = ""
+os.environ["GROQ_API_KEY"] = "test-key"
+os.environ["MOCK_API_BASE_URL"] = "http://mock-emr.test"
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+for path in (ROOT, os.path.join(ROOT, "Ophia"), os.path.join(ROOT, "ingestion")):
+    if path not in sys.path:
+        sys.path.insert(0, path)
+
+
+class FakeQuery:
+    """Supports the subset of the supabase-py query builder the services use."""
+
+    def __init__(self, db, table):
+        self.db, self.table, self.op = db, table, "select"
+        self.filters, self.values, self.row_limit = [], None, None
+
+    def select(self, *_):
+        return self
+
+    def insert(self, row):
+        self.op, self.values = "insert", row
+        return self
+
+    def update(self, values):
+        self.op, self.values = "update", values
+        return self
+
+    def eq(self, column, value):
+        self.filters.append((column, value))
+        return self
+
+    def limit(self, n):
+        self.row_limit = n
+        return self
+
+    def execute(self):
+        if self.db.fail:
+            raise RuntimeError("simulated database outage")
+        rows = self.db.tables.setdefault(self.table, [])
+        matches = [r for r in rows if all(r.get(c) == v for c, v in self.filters)]
+
+        class Result:
+            pass
+
+        result = Result()
+        if self.op == "insert":
+            rows.append(dict(self.values))
+            result.data = [dict(self.values)]
+        elif self.op == "update":
+            for row in matches:
+                row.update(self.values)
+            result.data = [dict(r) for r in matches]
+        else:
+            result.data = [dict(r) for r in matches][: self.row_limit]
+        return result
+
+
+class FakeSupabase:
+    def __init__(self, tables=None):
+        self.tables = tables or {}
+        self.fail = False
+
+    def table(self, name):
+        return FakeQuery(self, name)
+
+
+def demo_beds():
+    return [
+        {"id": "RES-ICU-01", "resource_name": "Ventilator Bed 01", "resource_type": "ICU_BED",
+         "wing": "West Wing", "status": "available", "assigned_to_patient": None},
+        {"id": "RES-NEURO-01", "resource_name": "Observation Bed 01", "resource_type": "GEN_WARD",
+         "wing": "Observation Wing B", "status": "available", "assigned_to_patient": None},
+        {"id": "RES-CARD-01", "resource_name": "Cardiac Monitor Bay 04", "resource_type": "GEN_WARD",
+         "wing": "Wing A", "status": "occupied", "assigned_to_patient": None},
+        {"id": "RES-MRI-01", "resource_name": "MRI Suite 1", "resource_type": "DIAGNOSTIC",
+         "wing": "Diagnostic Block", "status": "available", "assigned_to_patient": None},
+    ]
+
+
+@pytest.fixture
+def fake_db():
+    return FakeSupabase({"hospital_resources": demo_beds()})
