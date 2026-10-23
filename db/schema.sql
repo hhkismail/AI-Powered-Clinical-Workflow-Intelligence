@@ -119,7 +119,21 @@ create table if not exists public.bed_requests (
 create unique index if not exists bed_requests_one_waiting_per_patient
     on public.bed_requests (patient_id) where status = 'waiting';
 
--- ----- Access (migrations 001, 003 and 004) -----
+-- ----- Public demo AI budget (added in migrations/007_note_requests.sql) -----
+
+-- One row per note submitted on the deployed site (ingestion/demo_budget.py).
+-- The client is a salted hash of the visitor's address, never the address itself.
+create table if not exists public.note_requests (
+    id         bigint generated always as identity primary key,
+    client     text not null,
+    ai         text not null check (ai in ('llm', 'mock')),
+    created_at timestamptz not null default now()
+);
+
+create index if not exists note_requests_client_time on public.note_requests (client, created_at);
+create index if not exists note_requests_time on public.note_requests (created_at);
+
+-- ----- Access (migrations 001, 003, 004 and 007) -----
 -- Row-level security on every table with no policies: only the server-side
 -- secret key can read or write. The publishable key sees nothing.
 alter table public.patients enable row level security;
@@ -129,3 +143,4 @@ alter table public.appointments enable row level security;
 alter table public.medication_orders enable row level security;
 alter table public.care_tasks enable row level security;
 alter table public.bed_requests enable row level security;
+alter table public.note_requests enable row level security;

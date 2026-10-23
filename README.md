@@ -15,7 +15,7 @@ OPHIA is a hackathon prototype of an AI clinical workflow orchestrator. It takes
 ---
 
 ## 🏗️ Architecture
-OPHIA runs as four small services. The browser only ever talks to the Flask services; the Supabase secret key stays on the servers.
+OPHIA runs as four small services. The browser only ever talks to the Flask services; the Supabase secret key stays on the servers. Deployed, the same code runs as a single Vercel function (see [Deploying to Vercel](#-deploying-to-vercel)).
 
 ```mermaid
 flowchart LR
@@ -161,6 +161,23 @@ It's a stand-in, not a replacement: it only knows a list of common drugs and phr
 | 4 | Frontend (5500) | `python -m http.server 5500 --directory frontend`, then open http://localhost:5500 (notes) or http://localhost:5500/board.html (ward board) |
 
 Interactive API docs for the orchestrator are at http://localhost:8000/docs.
+
+---
+
+## 🌐 Deploying to Vercel
+[`app.py`](./app.py) runs the whole demo as one Vercel function on one domain: the frontend at `/`, the EMR API at `/emr`, ingestion at `/ingest`. The orchestrator has no public route. Ingestion calls it in-process and it calls the EMR API in-process, so a visitor can only reach what the browser uses. The EMR routes only the orchestrator should call (record updates, bed reservations, appointments) return 403 from outside, so every note goes through the allergy checks.
+
+The APIs have no login, so the public demo protects itself in two ways:
+* **AI budget** ([`ingestion/demo_budget.py`](./ingestion/demo_budget.py)): each visitor gets 5 notes per 10 minutes on the real LLM, and the whole site 4 per minute, under Groq's free-tier limit. Past that, notes are planned by the [mock AI](#running-without-a-groq-key) and the page says why. More than 30 notes an hour from one visitor are refused. The log is kept in Supabase (`note_requests`, migration 007) because Vercel instances share no memory, and it stores a salted hash of the visitor's address, never the address itself.
+* **Nightly reset:** a Vercel Cron job (`/api/cron/reset-demo`, 03:00 Malaysia time) puts the database back to the seed and replays five scripted admission notes through the mock AI, so the ward board never opens empty.
+
+To deploy your own:
+1. Apply [`db/migrations/007_note_requests.sql`](./db/migrations/007_note_requests.sql) (it's already in `schema.sql` for new databases).
+2. Import the repo at [vercel.com/new](https://vercel.com/new). No build settings are needed; Vercel finds `app.py` and installs `requirements.txt`.
+3. Add these environment variables: `GROQ_API_KEY`, `SUPABASE_URL`, `SUPABASE_SECRET_KEY`, `PUBLIC_DEMO=1`, and `CRON_SECRET` (a random string of at least 16 characters; Vercel sends it to the reset job).
+4. Deploy. [`vercel.json`](./vercel.json) runs the function in Mumbai (`bom1`), next to the Supabase project. Change `regions` if your database is elsewhere.
+
+The nightly reset deletes every note, appointment and ward order in the database. Point a deployment at a separate Supabase project if you want to keep your own data.
 
 ---
 

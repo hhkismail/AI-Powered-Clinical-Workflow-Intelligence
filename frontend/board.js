@@ -3,7 +3,9 @@
 // is hardcoded. Rendering functions are pure (data in, HTML out) so they can be tested
 // without a browser; the controller at the bottom only runs on a real page.
 
-const API_BASE = "http://127.0.0.1:3001";
+// Locally the EMR API has its own port (tools/start.py); deployed, app.py serves it under /emr
+const LOCAL = typeof location === "undefined" || ["localhost", "127.0.0.1"].includes(location.hostname);
+const API_BASE = LOCAL ? "http://127.0.0.1:3001" : "/emr";
 const REFRESH_MS = 5000;
 
 const ACUITY_LABELS = { critical: "Critical", serious: "Serious", stable: "Stable" };

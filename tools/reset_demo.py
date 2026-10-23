@@ -9,10 +9,15 @@ With --clear-board, the ward board is cleared too: all medication orders and
 care tasks are deleted and patient acuity is unset. Use it to start a demo
 from an empty board.
 
+With --all, everything notes have created is deleted as well (clinical notes,
+appointments, the waiting list and the public demo's AI budget log). The
+deployed demo does this every night (see app.py).
+
 Usage (from the repo root):
     python tools/reset_demo.py                 # reset the beds
     python tools/reset_demo.py --clear-board   # also clear medications, tasks and acuity
-    python tools/reset_demo.py --dry-run       # only show what would change (combines with --clear-board)
+    python tools/reset_demo.py --all           # back to db/seed.sql: also delete notes, appointments, waiting list
+    python tools/reset_demo.py --dry-run       # only show what would change (combines with the others)
 """
 
 import os
@@ -95,6 +100,26 @@ def clear_board(supabase, dry_run):
             .not_.is_("acuity", "null").execute()
 
 
+# Tables notes write to, children first (care tasks point at notes and medications)
+HISTORY_TABLES = ["bed_requests", "appointments", "clinical_notes", "note_requests"]
+
+
+def clear_history(supabase, dry_run):
+    """Delete everything notes have created, on top of clear_board."""
+    clear_board(supabase, dry_run)
+    for table in HISTORY_TABLES:
+        rows = supabase.table(table).select("id").execute().data
+        print(f"{'Would delete' if dry_run else 'Deleted'} {len(rows)} row(s) from {table}.")
+        if rows and not dry_run:
+            supabase.table(table).delete().not_.is_("id", "null").execute()
+
+
+def reset_all(supabase, dry_run=False):
+    """Back to the state db/seed.sql creates."""
+    clear_history(supabase, dry_run)
+    reset_beds(supabase, dry_run)
+
+
 def main() -> int:
     dry_run = "--dry-run" in sys.argv
     load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".env"))
@@ -105,6 +130,9 @@ def main() -> int:
         return 1
 
     supabase = create_client(url, key)
+    if "--all" in sys.argv:
+        reset_all(supabase, dry_run)
+        return 0
     reset_beds(supabase, dry_run)
     if "--clear-board" in sys.argv:
         clear_board(supabase, dry_run)

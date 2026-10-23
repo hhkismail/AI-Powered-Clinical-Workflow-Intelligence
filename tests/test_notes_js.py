@@ -175,3 +175,16 @@ def test_mock_ai_results_are_labelled(js):
     assert "Why the rules chose these actions" in html
     assert "Mock AI mode" in halted
     assert "Mock AI mode" not in js("renderResult", SUCCESS)
+
+
+@pytest.mark.parametrize("hostname, ingestion, emr", [
+    ("localhost", "http://127.0.0.1:5000/api/process-note", "http://127.0.0.1:3001"),
+    ("ophia-demo.vercel.app", "/ingest/api/process-note", "/emr"),
+])
+def test_api_urls_follow_where_the_page_is_served(hostname, ingestion, emr):
+    ctx = quickjs.Context()
+    ctx.eval(f"var location = {{hostname: {json.dumps(hostname)}}};")
+    with open(APP_JS, encoding="utf-8") as f:
+        ctx.eval(f.read())
+
+    assert (ctx.eval("INGESTION_URL"), ctx.eval("EMR_API")) == (ingestion, emr)

@@ -7,6 +7,7 @@ import json
 import os
 import sys
 from contextlib import asynccontextmanager
+from contextvars import ContextVar
 from typing import Any, Dict, List, Optional
 from datetime import datetime
 
@@ -79,6 +80,8 @@ class MetadataModel(BaseModel):
     department: str = Field(..., description="Department or specialty")
     timestamp: str = Field(..., description="ISO format timestamp")
     priority: str = Field(..., description="Priority level")
+    ai: Optional[str] = Field(default=None, description="'mock' asks for the rule-based planner instead of the LLM "
+                                                        "(the public demo does this when its AI budget is used up)")
 
 
 class PayloadModel(BaseModel):
@@ -131,9 +134,18 @@ def get_groq_api_key() -> Optional[str]:
     return os.getenv("GROQ_API_KEY") or os.getenv("ZAI_API_KEY")
 
 
+# Set per note when its request asks for the mock planner (metadata.ai == "mock")
+mock_for_this_note = ContextVar("mock_for_this_note", default=False)
+
+# The Vercel entrypoint (app.py) runs every service in one process and sets this
+# to the EMR API's Flask app, so actions are handled in-process instead of over HTTP
+EMR_APP = None
+
+
 def mock_ai_enabled() -> bool:
-    """MOCK_AI=1 swaps the LLM for the rule-based planner in mock_llm.py."""
-    return os.getenv("MOCK_AI", "").strip().lower() in ("1", "true", "yes", "on")
+    """MOCK_AI=1 swaps the LLM for the rule-based planner in mock_llm.py.
+    A single note can also ask for it; it can never turn the LLM on."""
+    return os.getenv("MOCK_AI", "").strip().lower() in ("1", "true", "yes", "on") or mock_for_this_note.get()
 
 
 class APIRejection(Exception):
@@ -362,6 +374,15 @@ def call_mock_api(endpoint: str, data: Dict[str, Any]) -> Dict[str, Any]:
     Raises:
         APIRejection with the API's message for 400 Bad Request
     """
+    if EMR_APP is not None:
+        response = EMR_APP.test_client().post(endpoint, json=data)
+        body = response.get_json(silent=True)
+        if response.status_code == 400:
+            raise APIRejection((body or {}).get("message", "Bad Request"))
+        if response.status_code >= 400 or body is None:
+            raise Exception(f"{endpoint} returned HTTP {response.status_code}")
+        return body
+
     url = f"{MOCK_API_BASE_URL}{endpoint}"
     
     try:
@@ -613,6 +634,7 @@ async def process_note(request: ProcessNoteRequest) -> ProcessNoteResponse:
         # Extract data from request
         raw_text = request.payload.raw_text
         patient_id = request.metadata.patient_id
+        mock_for_this_note.set(request.metadata.ai == "mock")
         
         print(f"\n[ORCHESTRATOR] Processing note for patient {patient_id}")
         print(f"[ORCHESTRATOR] Doctor: {request.metadata.doctor_id}")
