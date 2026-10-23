@@ -29,9 +29,13 @@ class FakeQuery:
 
     def __init__(self, db, table):
         self.db, self.table, self.op = db, table, "select"
-        self.filters, self.values, self.row_limit = [], None, None
+        self.filters, self.values, self.row_limit, self.columns = [], None, None, None
 
-    def select(self, *_):
+    def select(self, columns="*"):
+        # Like PostgREST, return only the requested columns, and fail on unknown
+        # ones (that's how a query for a nonexistent column like bed_number errors)
+        if columns.strip() != "*":
+            self.columns = [c.strip() for c in columns.split(",")]
         return self
 
     def insert(self, row):
@@ -74,7 +78,14 @@ class FakeQuery:
                 row.update(self.values)
             result.data = [dict(r) for r in matches]
         else:
-            result.data = [dict(r) for r in matches][: self.row_limit]
+            rows_out = [dict(r) for r in matches][: self.row_limit]
+            if self.columns:
+                known = set().union(*(r.keys() for r in rows)) if rows else set(self.columns)
+                missing = [c for c in self.columns if c not in known]
+                if missing:
+                    raise RuntimeError(f"column {self.table}.{missing[0]} does not exist")
+                rows_out = [{c: r.get(c) for c in self.columns} for r in rows_out]
+            result.data = rows_out
         return result
 
 
@@ -90,13 +101,13 @@ class FakeSupabase:
 
 def demo_beds():
     return [
-        {"id": "RES-ICU-01", "resource_name": "Ventilator Bed 01", "resource_type": "ICU_BED",
+        {"id": "RES-ICU-01", "department": "Critical Care", "resource_name": "Ventilator Bed 01", "resource_type": "ICU_BED",
          "wing": "West Wing", "status": "available", "assigned_to_patient": None},
-        {"id": "RES-NEURO-01", "resource_name": "Observation Bed 01", "resource_type": "GEN_WARD",
+        {"id": "RES-NEURO-01", "department": "Neurology", "resource_name": "Observation Bed 01", "resource_type": "GEN_WARD",
          "wing": "Observation Wing B", "status": "available", "assigned_to_patient": None},
-        {"id": "RES-CARD-01", "resource_name": "Cardiac Monitor Bay 04", "resource_type": "GEN_WARD",
+        {"id": "RES-CARD-01", "department": "Cardiology", "resource_name": "Cardiac Monitor Bay 04", "resource_type": "GEN_WARD",
          "wing": "Wing A", "status": "occupied", "assigned_to_patient": None},
-        {"id": "RES-MRI-01", "resource_name": "MRI Suite 1", "resource_type": "DIAGNOSTIC",
+        {"id": "RES-MRI-01", "department": "Radiology", "resource_name": "MRI Suite 1", "resource_type": "DIAGNOSTIC",
          "wing": "Diagnostic Block", "status": "available", "assigned_to_patient": None},
     ]
 
@@ -105,5 +116,7 @@ def demo_beds():
 def fake_db():
     return FakeSupabase({
         "hospital_resources": demo_beds(),
-        "patients": [{"patient_id": "PT-30554", "name": "Rajesh Kumar", "acuity": None, "acuity_updated_at": None}],
+        "patients": [{"patient_id": "PT-30554", "name": "Rajesh Kumar", "age": 62, "allergies": ["Aspirin"],
+                      "active_prescriptions": ["Atorvastatin"], "medical_history": "Post-MI",
+                      "acuity": None, "acuity_updated_at": None}],
     })

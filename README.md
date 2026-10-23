@@ -95,13 +95,22 @@ Interactive API docs for the orchestrator are at http://localhost:8000/docs.
 
 ---
 
+## 📝 Clinical Notes
+![Clinical notes page with patient context and a processed result](./docs/clinical-notes.png)
+
+`index.html` is where a clinician records a note: typed, or as a photo or voice memo.
+* **Patient context:** as you type a patient ID, their allergies, acuity, current bed, ward medication orders and history load alongside the form, so an allergy is visible *before* you prescribe.
+* **Clear results:** after processing you see exactly what happened: the record updated, the bed reserved (or why not), the follow-ups booked, how many next steps went to the ward board, the extracted prescriptions, and the AI's reasoning. Partial failures and safety halts are spelled out rather than hidden.
+
+---
+
 ## 🛏️ Ward Board
 ![Ward board with an open patient panel](./docs/ward-board.png)
 
 `board.html` shows every bed, grouped by wing, and refreshes every 5 seconds. Everything on it comes from processed notes; nothing is hardcoded.
 * **Bed cards:** status (available / occupied / being cleaned / maintenance), patient, **acuity** (critical / serious / stable, also shown by the card's colour), allergy warnings, active medications with **IV lines first**, accepted next steps, and how many AI suggestions are waiting.
 * **Patient panel:** click a card (or link to `board.html#bed=RES-ICU-01`) for history, all active medications and open tasks.
-* **Human in the loop:** AI-suggested next steps must be **accepted or rejected by a clinician** (enter your clinician ID at the top). Accepted tasks can be marked done. Each decision records who made it and when, and two clinicians can't both decide the same suggestion.
+* **Human in the loop:** AI-suggested next steps must be **accepted or rejected by a clinician** (enter your clinician ID in the sidebar; it's shared with the notes page). Accepted tasks can be marked done. Each decision records who made it and when, and two clinicians can't both decide the same suggestion.
 * **Bed turnover:** when a patient is transferred, the old bed goes to *being cleaned*; **Mark clean** makes it available again.
 * **Security:** the board talks only to the Mock EMR API (`GET /api/ward-board`, `POST /api/tasks/<id>/decision`, `POST /api/beds/<id>/mark-clean`). The browser never gets a Supabase key.
 

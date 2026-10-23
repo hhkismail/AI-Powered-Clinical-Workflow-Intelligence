@@ -9,6 +9,8 @@ const REFRESH_MS = 5000;
 const ACUITY_LABELS = { critical: "Critical", serious: "Serious", stable: "Stable" };
 const STATUS_LABELS = { available: "Available", occupied: "Occupied", cleaning: "Being cleaned", maintenance: "Maintenance" };
 const ROUTE_LABELS = { oral: "Oral", iv: "IV", im: "IM", subcutaneous: "SC", inhaled: "Inhaled", topical: "Topical", other: "Other" };
+const ALERT_ICON = '<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 9v4M12 17h.01M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/></svg>';
+const CLOSE_ICON = '<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg>';
 
 // Everything rendered with innerHTML comes from the database or the LLM, so escape it first
 function escapeHtml(value) {
@@ -26,89 +28,104 @@ function relativeTime(iso, now) {
   return `${Math.floor(seconds / 86400)} d ago`;
 }
 
-function medicationLine(m) {
-  const route = ROUTE_LABELS[m.route] || "";
-  const routeTag = route ? `<span class="route ${m.route === "iv" ? "route-iv" : ""}">${escapeHtml(route)}</span>` : "";
-  const detail = [m.dose, m.frequency].filter(Boolean).map(escapeHtml).join(" · ");
-  return `<li>${routeTag}<strong>${escapeHtml(m.drug)}</strong>${detail ? ` <span class="muted">${detail}</span>` : ""}</li>`;
+const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
+const allergyLine = p => (p.allergies || []).length
+  ? `<div class="allergy">${ALERT_ICON}Allergic to ${p.allergies.map(escapeHtml).join(", ")}</div>` : "";
+
+function medicationChip(m) {
+  const route = ROUTE_LABELS[m.route];
+  return `<span class="med ${m.route === "iv" ? "med-iv" : ""}">${route ? `<span class="route">${escapeHtml(route)}</span>` : ""}` +
+         `<b>${escapeHtml(m.drug)}</b>${escapeHtml(m.dose || "")}</span>`;
 }
 
-function renderSummary(summary) {
+function patientsOf(board) {
+  return (board.wards || []).flatMap(w => w.beds).map(b => b.patient).filter(Boolean);
+}
+
+function renderSummary(board) {
+  const summary = board.summary || {};
   const beds = summary.beds || {};
-  const chip = (label, value, cls) => `<div class="chip ${cls || ""}"><span>${escapeHtml(value)}</span>${escapeHtml(label)}</div>`;
+  const total = Object.values(beds).reduce((sum, n) => sum + n, 0);
+  const patients = patientsOf(board);
+  const critical = patients.filter(p => p.acuity === "critical").map(p => escapeHtml(p.name));
+  const pending = summary.pending_suggestions || 0;
+  const tile = (label, value, note, cls) =>
+    `<div class="kpi ${cls || ""}"><small>${label}</small><strong>${value}</strong><em>${note}</em></div>`;
   return [
-    chip("available", beds.available || 0, "chip-available"),
-    chip("occupied", beds.occupied || 0),
-    chip("being cleaned", beds.cleaning || 0, beds.cleaning ? "chip-cleaning" : ""),
-    chip("critical", summary.critical_patients || 0, summary.critical_patients ? "chip-critical" : ""),
-    chip("AI suggestions to review", summary.pending_suggestions || 0, summary.pending_suggestions ? "chip-pending" : "")
+    tile("Beds available", `${beds.available || 0}<span> / ${total}</span>`,
+         beds.cleaning ? `${plural(beds.cleaning, "bed")} being cleaned` : "None being cleaned"),
+    tile("Occupied", beds.occupied || 0, `${plural(patients.length, "patient")} assigned`),
+    tile("Critical", summary.critical_patients || 0, critical.length ? critical.join(", ") : "No critical patients", "kpi-critical"),
+    tile("Suggestions to review", pending, pending ? "Waiting on a clinician" : "All reviewed", "kpi-review")
   ].join("");
 }
 
-function renderBedCard(bed) {
-  const status = `<span class="status-pill status-${escapeHtml(bed.status)}">${escapeHtml(STATUS_LABELS[bed.status] || bed.status)}</span>`;
-  const header = `
+function renderBedCard(bed, openBedId) {
+  const head = `
     <div class="card-head">
       <div><div class="bed-name">${escapeHtml(bed.name)}</div>
-      <div class="muted small">${escapeHtml(bed.id)} · ${escapeHtml(bed.department || "")}${bed.type === "DIAGNOSTIC" ? " · Diagnostic" : ""}</div></div>
-      ${status}
+      <div class="bed-sub">${escapeHtml(bed.id)} · ${escapeHtml(bed.department || "")}${bed.type === "DIAGNOSTIC" ? " · Diagnostic" : ""}</div></div>
+      <span class="status status-${escapeHtml(bed.status)}">${escapeHtml(STATUS_LABELS[bed.status] || bed.status)}</span>
     </div>`;
 
   const p = bed.patient;
   if (!p) {
     const action = bed.status === "cleaning"
-      ? `<button class="btn-small" data-action="mark-clean" data-bed="${escapeHtml(bed.id)}">Mark clean</button>`
-      : "";
-    return `<article class="bed-card bed-empty">${header}${action}</article>`;
+      ? `<button class="btn btn-sm" data-action="mark-clean" data-bed="${escapeHtml(bed.id)}">Mark clean</button>` : "";
+    return `<article class="bed-card bed-empty">${head}${action}</article>`;
   }
 
-  const acuity = ACUITY_LABELS[p.acuity];
-  const allergies = (p.allergies || []).length
-    ? `<div class="allergy">⚠ Allergies: ${p.allergies.map(escapeHtml).join(", ")}</div>` : "";
   const meds = p.medications || [];
   const tasks = p.tasks || [];
   const suggested = tasks.filter(t => t.status === "suggested").length;
-  const accepted = tasks.filter(t => t.status === "accepted");
+  const accepted = tasks.filter(t => t.status === "accepted").length;
 
   return `
-    <article class="bed-card bed-occupied acuity-${escapeHtml(p.acuity || "unknown")}" tabindex="0" role="button"
-             data-action="open" data-bed="${escapeHtml(bed.id)}" aria-label="Open ${escapeHtml(p.name)}, ${escapeHtml(bed.name)}">
-      ${header}
-      <div class="patient-row">
-        <div class="patient-name">${escapeHtml(p.name)}${p.age != null ? ` <span class="muted">${escapeHtml(p.age)}</span>` : ""}</div>
-        <span class="acuity-badge">${escapeHtml(acuity || "Acuity not set")}</span>
+    <article class="bed-card bed-occupied acuity-${escapeHtml(p.acuity || "unknown")}${bed.id === openBedId ? " is-open" : ""}"
+             tabindex="0" role="button" data-action="open" data-bed="${escapeHtml(bed.id)}"
+             aria-label="Open ${escapeHtml(p.name)}, ${escapeHtml(bed.name)}">
+      ${head}
+      <div class="patient-block">
+        <div class="patient-row">
+          <div><div class="patient-name">${escapeHtml(p.name)}</div>
+          <div class="patient-meta">${escapeHtml(p.patient_id)}${p.age != null ? ` · ${escapeHtml(p.age)} y` : ""}</div></div>
+          <span class="acuity">${escapeHtml(ACUITY_LABELS[p.acuity] || "Not assessed")}</span>
+        </div>
+        ${allergyLine(p)}
       </div>
-      ${allergies}
-      <div class="section-title">Medications</div>
-      ${meds.length ? `<ul class="med-list">${meds.slice(0, 4).map(medicationLine).join("")}</ul>${meds.length > 4 ? `<div class="muted small">+${meds.length - 4} more</div>` : ""}`
-                    : `<div class="muted small">None active</div>`}
-      <div class="section-title">Next steps</div>
-      ${accepted.length ? `<ul class="task-list">${accepted.slice(0, 3).map(t => `<li>${escapeHtml(t.description)}</li>`).join("")}</ul>` : ""}
-      ${suggested ? `<div class="pending">${suggested} AI suggestion${suggested === 1 ? "" : "s"} to review</div>` : ""}
-      ${!accepted.length && !suggested ? `<div class="muted small">None</div>` : ""}
+      <div class="section-label">Medications</div>
+      ${meds.length ? `<div class="meds">${meds.slice(0, 4).map(medicationChip).join("")}</div>${meds.length > 4 ? `<div class="bed-sub">+${meds.length - 4} more</div>` : ""}`
+                    : `<div class="bed-sub">None active</div>`}
+      <div class="card-foot">
+        <span>${accepted ? `${plural(accepted, "task")} in progress` : "No tasks in progress"}</span>
+        ${suggested ? `<span class="to-review">${suggested} to review</span>` : ""}
+      </div>
     </article>`;
 }
 
-function renderBoard(board) {
-  return (board.wards || []).map(ward => `
+function renderBoard(board, openBedId) {
+  return (board.wards || []).map(ward => {
+    const free = ward.beds.filter(b => b.status === "available").length;
+    return `
     <section class="wing">
-      <h2>${escapeHtml(ward.wing)}</h2>
-      <div class="bed-grid">${ward.beds.map(renderBedCard).join("")}</div>
-    </section>`).join("");
+      <h2>${escapeHtml(ward.wing)} <span>${free} of ${ward.beds.length} free</span></h2>
+      <div class="bed-list">${ward.beds.map(b => renderBedCard(b, openBedId)).join("")}</div>
+    </section>`;
+  }).join("");
 }
 
 function renderTask(t) {
   const meta = t.status === "accepted"
     ? `Accepted by ${escapeHtml(t.decided_by || "unknown")}`
-    : `Suggested by ${t.suggested_by === "ai" ? "AI" : "clinician"}`;
+    : `Suggested by ${t.suggested_by === "ai" ? "AI" : "a clinician"}`;
   const buttons = t.status === "suggested"
-    ? `<button class="btn-small btn-accept" data-action="decide" data-decision="accept" data-task="${escapeHtml(t.id)}">Accept</button>
-       <button class="btn-small btn-reject" data-action="decide" data-decision="reject" data-task="${escapeHtml(t.id)}">Reject</button>`
-    : `<button class="btn-small" data-action="decide" data-decision="done" data-task="${escapeHtml(t.id)}">Mark done</button>`;
+    ? `<button class="btn btn-sm btn-accept" data-action="decide" data-decision="accept" data-task="${escapeHtml(t.id)}">Accept</button>
+       <button class="btn btn-sm btn-reject" data-action="decide" data-decision="reject" data-task="${escapeHtml(t.id)}">Reject</button>`
+    : `<button class="btn btn-sm" data-action="decide" data-decision="done" data-task="${escapeHtml(t.id)}">Mark done</button>`;
   return `
     <li class="task task-${escapeHtml(t.status)}">
-      <div><span class="category">${escapeHtml(t.category)}</span> ${escapeHtml(t.description)}
-      <div class="muted small">${meta}</div></div>
+      <div class="task-text">${escapeHtml(t.description)}</div>
+      <div class="task-meta"><span class="category">${escapeHtml(t.category)}</span><span>${meta}</span></div>
       <div class="task-buttons">${buttons}</div>
     </li>`;
 }
@@ -117,23 +134,27 @@ function renderPanel(bed, now) {
   const p = bed.patient;
   const meds = p.medications || [];
   const tasks = p.tasks || [];
+  const medLine = m => `<li><span class="route ${m.route === "iv" ? "route-iv" : ""}">${escapeHtml(ROUTE_LABELS[m.route] || "")}</span>
+    <div><b>${escapeHtml(m.drug)}</b> ${escapeHtml(m.dose || "")}${m.frequency ? `<small>${escapeHtml(m.frequency)}</small>` : ""}</div></li>`;
   return `
-    <div class="panel-head">
+    <div class="drawer-head">
       <div><h2>${escapeHtml(p.name)}</h2>
-      <div class="muted">${escapeHtml(p.patient_id)}${p.age != null ? ` · ${escapeHtml(p.age)} years` : ""} · ${escapeHtml(bed.name)} (${escapeHtml(bed.id)})</div></div>
-      <button class="btn-close" data-action="close" aria-label="Close">×</button>
+      <p>${escapeHtml(p.patient_id)}${p.age != null ? ` · ${escapeHtml(p.age)} years` : ""} · ${escapeHtml(bed.name)} (${escapeHtml(bed.id)})</p></div>
+      <button class="btn-close" data-action="close" aria-label="Close">${CLOSE_ICON}</button>
     </div>
-    <div class="acuity-line acuity-${escapeHtml(p.acuity || "unknown")}">
-      <span class="acuity-badge">${escapeHtml(ACUITY_LABELS[p.acuity] || "Acuity not set")}</span>
-      ${p.acuity_updated_at ? `<span class="muted small">updated ${escapeHtml(relativeTime(p.acuity_updated_at, now))}</span>` : ""}
-    </div>
-    ${(p.allergies || []).length ? `<div class="allergy">⚠ Allergies: ${p.allergies.map(escapeHtml).join(", ")}</div>` : ""}
-    ${p.medical_history ? `<div class="section-title">History</div><p>${escapeHtml(p.medical_history)}</p>` : ""}
-    <div class="section-title">Active medications</div>
-    ${meds.length ? `<ul class="med-list">${meds.map(medicationLine).join("")}</ul>` : `<p class="muted">None active</p>`}
-    <div class="section-title">Next steps</div>
-    <p class="muted small">AI suggestions only become tasks once a clinician accepts them.</p>
-    ${tasks.length ? `<ul class="task-panel-list">${tasks.map(renderTask).join("")}</ul>` : `<p class="muted">No open tasks</p>`}`;
+    <div class="drawer-body">
+      <div class="acuity-line acuity-${escapeHtml(p.acuity || "unknown")}">
+        <span class="acuity">${escapeHtml(ACUITY_LABELS[p.acuity] || "Not assessed")}</span>
+        ${p.acuity_updated_at ? `<span class="muted small">Assessed ${escapeHtml(relativeTime(p.acuity_updated_at, now))}</span>` : ""}
+      </div>
+      ${(p.allergies || []).length ? `<div class="allergy allergy-banner">${ALERT_ICON}Allergic to ${p.allergies.map(escapeHtml).join(", ")}</div>` : ""}
+      ${p.medical_history ? `<div class="section-label">History</div><p>${escapeHtml(p.medical_history)}</p>` : ""}
+      <div class="section-label">Active medications</div>
+      ${meds.length ? `<ul class="med-lines">${meds.map(medLine).join("")}</ul>` : `<p class="muted">None active</p>`}
+      <div class="section-label">Next steps</div>
+      <p class="muted small">AI suggestions only become tasks once a clinician accepts them.</p>
+      ${tasks.length ? `<ul class="task-list">${tasks.map(renderTask).join("")}</ul>` : `<p class="muted">No open tasks</p>`}
+    </div>`;
 }
 
 function findBed(board, bedId) {
@@ -151,17 +172,7 @@ if (typeof document !== "undefined") {
   const state = { board: null, openBed: bedFromHash(), loadedAt: null };
   const $ = id => document.getElementById(id);
 
-  function setOpenBed(bedId) {
-    state.openBed = bedId;
-    history.replaceState(null, "", bedId ? `#bed=${encodeURIComponent(bedId)}` : location.pathname);
-    render();
-    // On narrow screens the panel stacks below the board, so bring it into view
-    if (bedId && window.matchMedia("(max-width: 900px)").matches) {
-      $("panel").scrollIntoView({ behavior: "smooth", block: "start" });
-    }
-  }
-  window.addEventListener("hashchange", () => { state.openBed = bedFromHash(); render(); });
-
+  // Shared with the notes page, so a clinician only enters their ID once
   const clinicianInput = $("clinician-id");
   try { clinicianInput.value = localStorage.getItem("ophia.clinicianId") || ""; } catch (e) { /* storage blocked */ }
   clinicianInput.addEventListener("change", () => {
@@ -176,18 +187,26 @@ if (typeof document !== "undefined") {
 
   function render() {
     if (!state.board) return;
-    $("summary").innerHTML = renderSummary(state.board.summary || {});
-    $("board").innerHTML = renderBoard(state.board);
+    $("summary").innerHTML = renderSummary(state.board);
+    $("board").innerHTML = renderBoard(state.board, state.openBed);
+    $("nav-review-count").textContent = state.board.summary?.pending_suggestions || "";
     const bed = state.openBed && findBed(state.board, state.openBed);
-    const panel = $("panel");
     if (bed && bed.patient) {
       $("panel-content").innerHTML = renderPanel(bed);
-      panel.classList.remove("hidden");
+      $("panel").classList.remove("hidden");
     } else {
       // The patient may have moved or been discharged since the link was made
-      panel.classList.add("hidden");
+      $("panel").classList.add("hidden");
     }
   }
+
+  function setOpenBed(bedId) {
+    state.openBed = bedId;
+    history.replaceState(null, "", bedId ? `#bed=${encodeURIComponent(bedId)}` : location.pathname);
+    render();
+    if (bedId) $("panel").querySelector(".btn-close")?.focus();
+  }
+  window.addEventListener("hashchange", () => { state.openBed = bedFromHash(); render(); });
 
   async function load() {
     try {
@@ -224,7 +243,7 @@ if (typeof document !== "undefined") {
       } else if (action === "decide") {
         const clinician = clinicianInput.value.trim();
         if (!clinician) {
-          showError("Enter your clinician ID at the top before deciding on a task.");
+          showError("Enter your clinician ID in the sidebar before deciding on a task.");
           clinicianInput.focus();
           return;
         }

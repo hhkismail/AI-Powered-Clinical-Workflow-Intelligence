@@ -378,7 +378,7 @@ def get_patient(patient_id):
     try:
         result = (
             supabase.table('patients')
-            .select('name, age, allergies, active_prescriptions, medical_history')
+            .select('name, age, allergies, active_prescriptions, medical_history, acuity, acuity_updated_at')
             .eq('patient_id', patient_id)
             .execute()
         )
@@ -392,6 +392,11 @@ def get_patient(patient_id):
             }), 404
 
         patient = patient_rows[0]
+        # Current ward state, so the notes page can show context before a note is written
+        beds = supabase.table('hospital_resources').select('id, resource_name, wing') \
+            .eq('assigned_to_patient', patient_id).eq('status', 'occupied').execute().data or []
+        medications = supabase.table('medication_orders').select('drug, dose, route, frequency') \
+            .eq('patient_id', patient_id).eq('status', 'active').execute().data or []
 
         return jsonify({
             "status": "success",
@@ -400,9 +405,14 @@ def get_patient(patient_id):
             "age": patient.get('age'),
             "allergies": patient.get('allergies'),
             "active_prescriptions": patient.get('active_prescriptions'),
-            "medical_history": patient.get('medical_history')
+            "medical_history": patient.get('medical_history'),
+            "acuity": patient.get('acuity'),
+            "acuity_updated_at": patient.get('acuity_updated_at'),
+            "bed": beds[0] if beds else None,
+            "medication_orders": medications
         }), 200
-    except Exception:
+    except Exception as e:
+        print(f"[patient] Supabase error: {e}")
         return supabase_query_failed_response("Unable to fetch the patient record from the database.")
 
 # 5. Check Ward Availability (Read)

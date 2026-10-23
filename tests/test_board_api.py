@@ -14,11 +14,11 @@ def board_db(fake_db):
     beds["RES-CARD-01"].update(status="cleaning", assigned_to_patient=None)
     fake_db.tables["patients"] = [
         {"patient_id": "PT-30554", "name": "Rajesh Kumar", "age": 62, "allergies": ["Aspirin"],
-         "medical_history": "Post-MI", "acuity": "serious", "acuity_updated_at": "2026-10-23T08:00:00Z"},
+         "active_prescriptions": ["Atorvastatin"], "medical_history": "Post-MI", "acuity": "serious", "acuity_updated_at": "2026-10-23T08:00:00Z"},
         {"patient_id": "PT-20221", "name": "Siti Aminah", "age": 8, "allergies": ["Latex"],
-         "medical_history": "Asthma", "acuity": "critical", "acuity_updated_at": "2026-10-23T09:00:00Z"},
+         "active_prescriptions": [], "medical_history": "Asthma", "acuity": "critical", "acuity_updated_at": "2026-10-23T09:00:00Z"},
         {"patient_id": "PT-40992", "name": "Michael Wong", "age": 29, "allergies": [],
-         "medical_history": None, "acuity": "stable", "acuity_updated_at": None},
+         "active_prescriptions": [], "medical_history": None, "acuity": "stable", "acuity_updated_at": None},
     ]
     fake_db.tables["medication_orders"] = [
         {"id": "m1", "patient_id": "PT-30554", "drug": "Metoprolol", "dose": "25mg", "route": "oral",
@@ -111,6 +111,26 @@ def test_board_reports_database_failure(client, board_db):
 
     assert resp.status_code == 500
     assert resp.get_json()["error_code"] == "SUPABASE_QUERY_FAILED"
+
+
+# ---------- GET /api/patient/<id> (patient context on the notes page) ----------
+
+def test_patient_includes_acuity_bed_and_active_medications(client):
+    p = client.get("/api/patient/PT-30554").get_json()
+
+    assert (p["name"], p["acuity"], p["allergies"]) == ("Rajesh Kumar", "serious", ["Aspirin"])
+    assert p["bed"] == {"id": "RES-NEURO-01", "resource_name": "Observation Bed 01", "wing": "Observation Wing B"}
+    assert [m["drug"] for m in p["medication_orders"]] == ["Metoprolol", "Heparin"]   # stopped orders excluded
+
+
+def test_patient_without_bed_or_orders(client):
+    p = client.get("/api/patient/PT-40992").get_json()
+
+    assert p["bed"] is None and p["medication_orders"] == []
+
+
+def test_unknown_patient_is_404(client):
+    assert client.get("/api/patient/PT-NOPE").status_code == 404
 
 
 # ---------- POST /api/tasks/<id>/decision ----------
