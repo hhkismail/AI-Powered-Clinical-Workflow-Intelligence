@@ -362,3 +362,13 @@ def test_ward_availability_counts_free_beds_per_wing(client):
     # Previously hardcoded to "2026-04-23T08:00:00Z"
     assert data["timestamp"][:10] in {date.today().isoformat(), (date.today() - timedelta(days=1)).isoformat(),
                                       (date.today() + timedelta(days=1)).isoformat()}
+
+
+def test_lowercase_drug_names_are_capitalised_but_others_kept(client, fake_db):
+    client.post("/api/update-record", json={**FULL_NOTE, "prescriptions": [
+        {"drug": "diltiazem", "dosage": "60mg", "route": "oral"},
+        {"drug": "piperacillin-tazobactam", "dosage": "4.5g", "route": "iv"},
+        {"drug": "IV Paracetamol", "dosage": "1g", "route": "iv"}]})
+
+    assert [m["drug"] for m in fake_db.tables["medication_orders"]] == [
+        "Diltiazem", "Piperacillin-tazobactam", "IV Paracetamol"]

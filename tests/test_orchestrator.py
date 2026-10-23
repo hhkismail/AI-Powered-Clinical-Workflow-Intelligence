@@ -332,3 +332,15 @@ def test_rate_limit_gets_a_readable_message(monkeypatch):
 
     assert alert["type"] == "AI Gateway Error"
     assert "rate limit" in alert["message"] and "org_123" not in alert["message"]
+
+
+def test_update_record_receives_discontinuations_and_the_doctor(client, monkeypatch, mock_apis):
+    sent = {}
+    monkeypatch.setattr(main, "call_mock_api", lambda endpoint, data: sent.update({endpoint: data}) or {"status": "success"})
+    stop = [{"drug": "Metoprolol", "reason": "Bradycardia", "explicit": True}]
+    mock_apis["llm"]["actions"] = [{"tool": "update_record", "params": {"diagnoses": [], "prescriptions": [], "discontinue": stop}}]
+
+    client.post("/api/process-note", json=NOTE_REQUEST)
+
+    assert sent["/api/update-record"]["discontinue"] == stop
+    assert sent["/api/update-record"]["recorded_by"] == "DR-7742"
