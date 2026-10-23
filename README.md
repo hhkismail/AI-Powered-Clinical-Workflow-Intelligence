@@ -39,7 +39,9 @@ The following documents are located in the root directory for review:
 * A Supabase project (the free tier is fine)
 
 ### 1. Set up the database
-In your Supabase project's SQL editor, run [`db/schema.sql`](./db/schema.sql) to create the four tables, then [`db/seed.sql`](./db/seed.sql) for the demo patients and beds (all fictional).
+In your Supabase project's SQL editor, run [`db/schema.sql`](./db/schema.sql) to create the tables, then [`db/seed.sql`](./db/seed.sql) for the demo patients and beds (all fictional).
+
+If your database was created from an older version of `schema.sql`, apply the files in [`db/migrations/`](./db/migrations/) in order instead. Each one has a matching `.down.sql` rollback.
 
 ### 2. Install dependencies
 All three services share one `requirements.txt`:
