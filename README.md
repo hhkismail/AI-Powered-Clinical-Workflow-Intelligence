@@ -48,8 +48,18 @@ With `MOCK_AI=1`, step 2's LLM call is replaced by keyword rules ([`Ophia/mock_l
 
 ---
 
-## 👤 My Contributions
-Ophia started as a four-person team project for UM Hackathon 2026; the original prototype (ingestion, OCR and audio, the first orchestrator and the Supabase backend) was built together during the hackathon, as the commit history shows. Since then I've taken it from a demo that only half worked to a tested system, one reviewed pull request at a time:
+## 👥 Team and Contributions
+Ophia was built by a team of four for UM Hackathon 2026. The core idea, an LLM that turns a doctor's note into hospital actions, and the first working pipeline came from the team:
+
+| Who | During the hackathon |
+|---|---|
+| [@fthanifa](https://github.com/fthanifa) | Ingestion gateway: OCR for photographed notes, audio transcription, and the first clinical notes page |
+| [@razinar05](https://github.com/razinar05) | The AI orchestrator (FastAPI service, LLM prompt and action execution) |
+| [@Rizwii](https://github.com/Rizwii) | The Mock EMR API and its Supabase integration |
+| [@hhkismail](https://github.com/hhkismail) (me) | The Supabase database design, then the final integration and fixes before submission |
+
+### What I've done since
+After the hackathon I kept working on it on my own, focusing on making it correct, safe and testable. Every change went through a pull request with the test suite running in CI:
 
 * **Made it work and made failures visible** ([#1](https://github.com/hhkismail/AI-Powered-Clinical-Workflow-Intelligence/pull/1), [#2](https://github.com/hhkismail/AI-Powered-Clinical-Workflow-Intelligence/pull/2), [#3](https://github.com/hhkismail/AI-Powered-Clinical-Workflow-Intelligence/pull/3)): removed fake success responses, fixed bed reservations end to end, moved to current Groq models, and made partial failures and safety halts show up instead of being swallowed.
 * **Tests, CI and an LLM eval** ([#3](https://github.com/hhkismail/AI-Powered-Clinical-Workflow-Intelligence/pull/3) onwards): 200+ pytest tests across all three services against an in-memory Supabase fake that rejects unknown columns (the bug class that broke the original demo), frontend rendering tests in QuickJS, a schema drift test, GitHub Actions on every push, and a clinical safety eval that runs fixed notes through the real model.
