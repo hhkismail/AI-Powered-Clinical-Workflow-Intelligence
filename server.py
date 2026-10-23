@@ -1,4 +1,5 @@
 import os
+import sys
 import uuid
 from datetime import date, datetime, timedelta, timezone
 
@@ -7,6 +8,10 @@ from flask_cors import CORS
 from dotenv import load_dotenv
 from supabase import create_client
 
+# Write log lines straight away, even when output is redirected to a file
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(line_buffering=True)
+
 app = Flask(__name__)
 # Enable CORS globally so the browser dashboard isn't blocked
 CORS(app)
@@ -14,13 +19,19 @@ CORS(app)
 load_dotenv()
 supabase_url = os.getenv("SUPABASE_URL")
 def server_supabase_key():
-    """Server-side, so prefer the secret key: the ward board tables have row-level
-    security that blocks the publishable key. Falls back for older .env files."""
-    return os.getenv("SUPABASE_SECRET_KEY") or os.getenv("SUPABASE_KEY")
+    """The server-side secret key. Every table has row-level security, which makes
+    the publishable key see empty tables rather than fail, so it's not accepted."""
+    key = os.getenv("SUPABASE_SECRET_KEY")
+    if key and key.startswith("sb_publishable_"):
+        print("[startup] SUPABASE_SECRET_KEY is a publishable key; use the sb_secret_ key")
+        return None
+    return key
 
 
 supabase_key = server_supabase_key()
 supabase = create_client(supabase_url, supabase_key) if supabase_url and supabase_key else None
+if supabase is None:
+    print("[startup] Supabase is not configured: set SUPABASE_URL and SUPABASE_SECRET_KEY in .env")
 
 # Free-text routes and categories from the LLM, mapped to the values the
 # medication_orders / care_tasks check constraints allow
@@ -102,7 +113,7 @@ def supabase_unavailable_response():
     return jsonify({
         "status": "error",
         "error_code": "SUPABASE_NOT_CONFIGURED",
-        "message": "Supabase credentials are missing from the environment."
+        "message": "Supabase isn't configured: set SUPABASE_URL and SUPABASE_SECRET_KEY in .env."
     }), 500
 
 
@@ -234,6 +245,21 @@ def reserve_bed():
         }), 200
     except Exception as e:
         print(f"[reserve-bed] Supabase error: {e}")
+        # A dropped connection can lose the reply to a write that succeeded. A bed's
+        # state can be checked, so look before reporting a failure that didn't happen.
+        try:
+            held = supabase.table('hospital_resources').select('id, resource_name, wing, resource_type')                 .eq('assigned_to_patient', patient_id).eq('status', 'occupied').execute().data or []
+        except Exception:
+            held = []
+        bed = next((b for b in held if b.get('resource_type') == mapped_resource_type), None)
+        if bed:
+            print(f"[reserve-bed] {patient_id} does hold {bed['id']}; reporting success")
+            return jsonify({
+                "status": "success",
+                "reservation_id": bed['id'],
+                "allocation": {"ward": bed.get('wing'), "bed": bed.get('resource_name'), "status": "occupied"},
+                "message": "Bed reserved (confirmed after a database connection error)."
+            }), 200
         return supabase_query_failed_response("Unable to reserve a bed from the database.")
 
 

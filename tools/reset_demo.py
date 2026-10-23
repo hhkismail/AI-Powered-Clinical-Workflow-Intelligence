@@ -98,18 +98,15 @@ def clear_board(supabase, dry_run):
 def main() -> int:
     dry_run = "--dry-run" in sys.argv
     load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".env"))
-    # The ward board tables have row-level security, so clearing them needs the secret key
-    url, key = os.getenv("SUPABASE_URL"), os.getenv("SUPABASE_SECRET_KEY") or os.getenv("SUPABASE_KEY")
-    if not url or not key:
-        print("SUPABASE_URL and SUPABASE_SECRET_KEY (or SUPABASE_KEY) must be set in .env")
+    # Every table has row-level security, so only the server-side secret key can reset them
+    url, key = os.getenv("SUPABASE_URL"), os.getenv("SUPABASE_SECRET_KEY")
+    if not url or not key or key.startswith("sb_publishable_"):
+        print("SUPABASE_URL and SUPABASE_SECRET_KEY (the sb_secret_ key) must be set in .env")
         return 1
 
     supabase = create_client(url, key)
     reset_beds(supabase, dry_run)
     if "--clear-board" in sys.argv:
-        if not os.getenv("SUPABASE_SECRET_KEY"):
-            print("--clear-board needs SUPABASE_SECRET_KEY in .env (row-level security blocks the publishable key)")
-            return 1
         clear_board(supabase, dry_run)
     return 0
 
