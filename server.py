@@ -56,17 +56,28 @@ def reserve_bed():
     ward_type = data['ward_type']
     resource_type = str(ward_type).strip().lower()
 
+    # The LLM sends ward types like 'icu' or 'observation'; hospital_resources
+    # stores bed types as ICU_BED / GEN_WARD. Observation beds are general ward beds.
     ward_to_resource_map = {
-        'observation': 'observation',
-        'general': 'general',
-        'icu': 'icu'
+        'icu': 'ICU_BED',
+        'icu_bed': 'ICU_BED',
+        'observation': 'GEN_WARD',
+        'general': 'GEN_WARD',
+        'gen_ward': 'GEN_WARD'
     }
-    mapped_resource_type = ward_to_resource_map.get(resource_type, resource_type)
+    mapped_resource_type = ward_to_resource_map.get(resource_type)
+
+    if mapped_resource_type is None:
+        return jsonify({
+            "status": "error",
+            "error_code": "INVALID_WARD_TYPE",
+            "message": f"Unknown ward_type '{ward_type}'. Expected one of: icu, observation, general."
+        }), 400
 
     try:
         bed_result = (
             supabase.table('hospital_resources')
-            .select('id, wing, bed_number, resource_type, status')
+            .select('id, resource_name, wing, resource_type, status')
             .eq('resource_type', mapped_resource_type)
             .eq('status', 'available')
             .limit(1)
@@ -82,24 +93,14 @@ def reserve_bed():
             }), 400
 
         bed = available_beds[0]
-        update_query = (
+        # Re-check status in the update so two requests can't take the same bed
+        update_result = (
             supabase.table('hospital_resources')
             .update({'status': 'occupied', 'assigned_to_patient': patient_id})
+            .eq('id', bed['id'])
             .eq('status', 'available')
+            .execute()
         )
-
-        if bed.get('id') is not None:
-            update_query = update_query.eq('id', bed['id'])
-        elif bed.get('bed_number') is not None:
-            update_query = update_query.eq('bed_number', bed['bed_number'])
-        else:
-            return jsonify({
-                "status": "error",
-                "error_code": "BED_IDENTIFIER_MISSING",
-                "message": "The available bed record is missing an identifier."
-            }), 500
-
-        update_result = update_query.execute()
         updated_rows = update_result.data or []
 
         if not updated_rows:
@@ -113,15 +114,16 @@ def reserve_bed():
 
         return jsonify({
             "status": "success",
-            "reservation_id": f"RES-{updated_bed.get('id', updated_bed.get('bed_number', 'UNKNOWN'))}",
+            "reservation_id": updated_bed['id'],
             "allocation": {
-                "ward": updated_bed.get('wing', bed.get('wing')),
-                "bed_number": updated_bed.get('bed_number', bed.get('bed_number')),
+                "ward": updated_bed.get('wing'),
+                "bed": updated_bed.get('resource_name'),
                 "status": updated_bed.get('status', 'occupied')
             },
             "message": "Bed reserved successfully."
         }), 200
-    except Exception:
+    except Exception as e:
+        print(f"[reserve-bed] Supabase error: {e}")
         return supabase_query_failed_response("Unable to reserve a bed from the database.")
 
 
