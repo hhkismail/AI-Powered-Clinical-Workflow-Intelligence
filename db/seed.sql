@@ -9,7 +9,7 @@ insert into public.patients (patient_id, name, age, allergies, active_prescripti
     ('PT-20221', 'Siti Aminah',    8, array['Latex', 'Peanuts'],         array[]::text[],          'Pediatric Asthma'),
     ('PT-40992', 'Michael Wong',  29, array[]::text[],                   array[]::text[],          'Emergency: Possible Tibia Fracture, No chronic history'),
     ('PT-55108', 'Fatimah Zahra', 71, array['Ibuprofen'],                array['Donepezil'],       'Early-stage Alzheimer, GERD'),
-    ('PT-10934', 'New Patient',   45, array['Penicillin', 'Sulfa Drugs'], array['Metformin 500mg'], 'Type 2 Diabetes, Hypertension')
+    ('PT-10934', 'Ahmad Faizal',  45, array['Penicillin', 'Sulfa Drugs'], array['Metformin 500mg'], 'Type 2 Diabetes, Hypertension')
 on conflict (patient_id) do nothing;
 
 -- 24 beds across four wards (6 each), plus two scanners that aren't beds.

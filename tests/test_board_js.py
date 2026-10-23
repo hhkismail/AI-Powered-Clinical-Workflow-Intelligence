@@ -155,3 +155,66 @@ def test_panel_offers_discharge_then_asks_for_confirmation(js):
     assert 'data-action="discharge-confirm" data-bed="RES-NEURO-01"' in confirm
     assert "Discharge Rajesh Kumar?" in confirm
     assert "2 active medications will be marked completed" in confirm and "2 open tasks cancelled" in confirm
+
+
+# ---------- Waiting for a bed ----------
+
+def waiting_entry(request_id="r1", free=0, current_bed=None, acuity="critical", name="Fatimah Zahra"):
+    patient = json.loads(json.dumps(RAJESH_BED["patient"]))
+    patient.update(patient_id="PT-55108", name=name, acuity=acuity, allergies=["Ibuprofen"])
+    return {"request_id": request_id, "ward_type": "icu", "department": "Critical Care",
+            "clinical_reason": "Ventilated", "requested_at": "2026-10-23T08:00:00Z",
+            "current_bed": current_bed, "free_matching_beds": free, "patient": patient}
+
+
+def test_waiting_list_is_hidden_when_nobody_is_waiting(js):
+    assert js("renderWaiting", {"waiting": []}, None) == ""
+
+
+def test_waiting_row_shows_need_reason_and_allergy(js):
+    html = js("renderWaiting", {"waiting": [waiting_entry()]}, None, 0)
+
+    assert "Waiting for a bed <span>1</span>" in html
+    assert "Fatimah Zahra" in html and "Needs an ICU bed" in html and "Ventilated" in html
+    assert "Allergic to Ibuprofen" in html and "acuity-critical" in html
+    assert 'data-action="open-waiting" data-request="r1"' in html
+
+
+def test_assign_is_only_offered_when_a_matching_bed_is_free(js):
+    none_free = js("renderWaiting", {"waiting": [waiting_entry(free=0)]}, None, 0)
+    assert 'data-action="assign"' not in none_free and "No ICU bed free" in none_free
+
+    free = js("renderWaiting", {"waiting": [waiting_entry(free=2)]}, None, 0)
+    assert 'data-action="assign" data-request="r1"' in free
+    assert 'data-action="cancel-request" data-request="r1"' in free
+
+
+def test_waiting_transfer_says_where_the_patient_is_now(js):
+    html = js("renderWaiting", {"waiting": [waiting_entry(current_bed={"id": "RES-NEURO-01", "name": "Observation Bed 01"})]}, None, 0)
+
+    assert "In Observation Bed 01, needs an ICU bed" in html
+
+
+def test_waiting_drawer_shows_tasks_and_waiting_actions(js):
+    html = js("renderWaitingPanel", waiting_entry(free=1), 0)
+
+    assert 'data-decision="accept" data-task="t2"' in html      # AI suggestions are reviewable while waiting
+    assert 'data-action="assign"' in html and 'data-action="discharge-start"' not in html
+
+
+def test_summary_names_critical_patients_who_are_waiting(js):
+    board = board_with(CLEANING_BED, summary={"beds": {"available": 0, "occupied": 1, "cleaning": 1},
+                                              "critical_patients": 1, "pending_suggestions": 1, "waiting": 1})
+    board["waiting"] = [waiting_entry()]
+
+    html = js("renderSummary", board)
+
+    assert "Fatimah Zahra" in html and "1 patient waiting for a bed" in html
+
+
+def test_waiting_text_is_escaped(js):
+    entry = waiting_entry(name="<img src=x onerror=alert(1)>")
+    entry["clinical_reason"] = "<script>x()</script>"
+
+    for html in (js("renderWaiting", {"waiting": [entry]}, None, 0), js("renderWaitingPanel", entry, 0)):
+        assert "<img" not in html and "<script>" not in html

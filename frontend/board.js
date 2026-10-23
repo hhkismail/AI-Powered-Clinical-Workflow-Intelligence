@@ -38,8 +38,11 @@ function medicationChip(m) {
          `<b>${escapeHtml(m.drug)}</b>${escapeHtml(m.dose || "")}</span>`;
 }
 
+// Everyone on the board, in a bed or waiting for one, counted once
 function patientsOf(board) {
-  return (board.wards || []).flatMap(w => w.beds).map(b => b.patient).filter(Boolean);
+  const all = (board.wards || []).flatMap(w => w.beds).map(b => b.patient)
+    .concat((board.waiting || []).map(w => w.patient)).filter(Boolean);
+  return [...new Map(all.map(p => [p.patient_id, p])).values()];
 }
 
 function renderSummary(board) {
@@ -54,7 +57,8 @@ function renderSummary(board) {
   return [
     tile("Beds available", `${beds.available || 0}<span> / ${total}</span>`,
          beds.cleaning ? `${plural(beds.cleaning, "bed")} being cleaned` : "None being cleaned"),
-    tile("Occupied", beds.occupied || 0, `${plural(patients.length, "patient")} assigned`),
+    tile("Occupied", beds.occupied || 0, summary.waiting
+      ? `${plural(summary.waiting, "patient")} waiting for a bed` : "Nobody waiting for a bed"),
     tile("Critical", summary.critical_patients || 0, critical.length ? critical.join(", ") : "No critical patients", "kpi-critical"),
     tile("Suggestions to review", pending, pending ? "Waiting on a clinician" : "All reviewed", "kpi-review")
   ].join("");
@@ -164,19 +168,13 @@ function renderDischarge(bed, confirming) {
     </div>`;
 }
 
-function renderPanel(bed, now, confirmingDischarge) {
-  const p = bed.patient;
+// Acuity, allergies, history, medications and tasks: shared by bed and waiting-list drawers
+function renderPatientDetails(p, now) {
   const meds = p.medications || [];
   const tasks = p.tasks || [];
   const medLine = m => `<li><span class="route ${m.route === "iv" ? "route-iv" : ""}">${escapeHtml(ROUTE_LABELS[m.route] || "")}</span>
     <div><b>${escapeHtml(m.drug)}</b> ${escapeHtml(m.dose || "")}${m.frequency ? `<small>${escapeHtml(m.frequency)}</small>` : ""}</div></li>`;
   return `
-    <div class="drawer-head">
-      <div><h2>${escapeHtml(p.name)}</h2>
-      <p>${escapeHtml(p.patient_id)}${p.age != null ? ` · ${escapeHtml(p.age)} years` : ""} · ${escapeHtml(bed.name)} (${escapeHtml(bed.id)})</p></div>
-      <button class="btn-close" data-action="close" aria-label="Close">${CLOSE_ICON}</button>
-    </div>
-    <div class="drawer-body">
       <div class="acuity-line acuity-${escapeHtml(p.acuity || "unknown")}">
         <span class="acuity">${escapeHtml(ACUITY_LABELS[p.acuity] || "Not assessed")}</span>
         ${p.acuity_updated_at ? `<span class="muted small">Assessed ${escapeHtml(relativeTime(p.acuity_updated_at, now))}</span>` : ""}
@@ -187,8 +185,79 @@ function renderPanel(bed, now, confirmingDischarge) {
       ${meds.length ? `<ul class="med-lines">${meds.map(medLine).join("")}</ul>` : `<p class="muted">None active</p>`}
       <div class="section-label">Next steps</div>
       <p class="muted small">AI suggestions only become tasks once a clinician accepts them.</p>
-      ${tasks.length ? `<ul class="task-list">${tasks.map(renderTask).join("")}</ul>` : `<p class="muted">No open tasks</p>`}
+      ${tasks.length ? `<ul class="task-list">${tasks.map(renderTask).join("")}</ul>` : `<p class="muted">No open tasks</p>`}`;
+}
+
+function drawerHead(p, subtitle) {
+  return `
+    <div class="drawer-head">
+      <div><h2>${escapeHtml(p.name)}</h2>
+      <p>${escapeHtml(p.patient_id)}${p.age != null ? ` · ${escapeHtml(p.age)} years` : ""} · ${subtitle}</p></div>
+      <button class="btn-close" data-action="close" aria-label="Close">${CLOSE_ICON}</button>
+    </div>`;
+}
+
+function renderPanel(bed, now, confirmingDischarge) {
+  return `
+    ${drawerHead(bed.patient, `${escapeHtml(bed.name)} (${escapeHtml(bed.id)})`)}
+    <div class="drawer-body">
+      ${renderPatientDetails(bed.patient, now)}
       ${renderDischarge(bed, confirmingDischarge)}
+    </div>`;
+}
+
+// ---------- Waiting for a bed ----------
+
+const WARD_LABELS = { icu: "ICU", observation: "observation", general: "general ward" };
+
+function waitingActions(w) {
+  const label = WARD_LABELS[w.ward_type] || w.ward_type;
+  const free = w.free_matching_beds || 0;
+  const assign = free
+    ? `<button class="btn btn-sm btn-primary" data-action="assign" data-request="${escapeHtml(w.request_id)}">Assign bed</button>`
+    : `<button class="btn btn-sm" disabled title="No ${escapeHtml(label)} bed is free">No ${escapeHtml(label)} bed free</button>`;
+  return `${assign}<button class="btn btn-sm" data-action="cancel-request" data-request="${escapeHtml(w.request_id)}">Remove</button>`;
+}
+
+function waitingSubtitle(w, now) {
+  const label = WARD_LABELS[w.ward_type] || w.ward_type;
+  const since = w.requested_at ? `, waiting ${escapeHtml(relativeTime(w.requested_at, now).replace(" ago", ""))}` : "";
+  return w.current_bed
+    ? `In ${escapeHtml(w.current_bed.name)}, needs an ${escapeHtml(label)} bed${since}`
+    : `Needs a${/^[aeiou]/i.test(label) ? "n" : ""} ${escapeHtml(label)} bed${since}`;
+}
+
+function renderWaiting(board, openRequestId, now) {
+  const waiting = board.waiting || [];
+  if (!waiting.length) return "";
+  const rows = waiting.map(w => {
+    const p = w.patient || { name: "Unknown patient", patient_id: "" };
+    return `
+      <li class="waiting-row acuity-${escapeHtml(p.acuity || "unknown")}${w.request_id === openRequestId ? " is-open" : ""}"
+          tabindex="0" role="button" data-action="open-waiting" data-request="${escapeHtml(w.request_id)}"
+          aria-label="Open ${escapeHtml(p.name)}, waiting for a bed">
+        <div class="waiting-who">
+          <div class="patient-name">${escapeHtml(p.name)} <span class="patient-meta">${escapeHtml(p.patient_id)}${p.age != null ? ` · ${escapeHtml(p.age)} y` : ""}</span></div>
+          <div class="bed-sub">${waitingSubtitle(w, now)}${w.clinical_reason ? ` · ${escapeHtml(w.clinical_reason)}` : ""}</div>
+          ${allergyLine(p)}
+        </div>
+        <span class="acuity">${escapeHtml(ACUITY_LABELS[p.acuity] || "Not assessed")}</span>
+        <div class="waiting-actions">${waitingActions(w)}</div>
+      </li>`;
+  }).join("");
+  return `
+    <section class="waiting panel">
+      <h2>Waiting for a bed <span>${waiting.length}</span></h2>
+      <ul class="waiting-list">${rows}</ul>
+    </section>`;
+}
+
+function renderWaitingPanel(w, now) {
+  return `
+    ${drawerHead(w.patient, waitingSubtitle(w, now))}
+    <div class="drawer-body">
+      ${renderPatientDetails(w.patient, now)}
+      <div class="discharge"><div class="task-buttons">${waitingActions(w)}</div></div>
     </div>`;
 }
 
@@ -199,12 +268,20 @@ function findBed(board, bedId) {
   return null;
 }
 
+function findWaiting(board, requestId) {
+  return (board.waiting || []).find(w => w.request_id === requestId) || null;
+}
+
 // ---------- Controller (browser only) ----------
 
 if (typeof document !== "undefined") {
-  // board.html#bed=RES-ICU-01 opens that bed's panel, so a patient can be linked to
-  const bedFromHash = () => decodeURIComponent((location.hash.match(/^#bed=(.+)$/) || [])[1] || "") || null;
-  const state = { board: null, openBed: bedFromHash(), loadedAt: null, confirmDischarge: false };
+  // board.html#bed=RES-ICU-01 or #waiting=<request id> opens that patient's drawer, so it can be linked to
+  const openFromHash = () => {
+    const m = location.hash.match(/^#(bed|waiting)=(.+)$/);
+    return m ? { kind: m[1], id: decodeURIComponent(m[2]) } : null;
+  };
+  const state = { board: null, open: openFromHash(), loadedAt: null, confirmDischarge: false };
+  const openId = kind => (state.open && state.open.kind === kind ? state.open.id : null);
   const $ = id => document.getElementById(id);
 
   // Shared with the notes page, so a clinician only enters their ID once
@@ -223,26 +300,32 @@ if (typeof document !== "undefined") {
   function render() {
     if (!state.board) return;
     $("summary").innerHTML = renderSummary(state.board);
-    $("board").innerHTML = renderBoard(state.board, state.openBed);
+    $("waiting").innerHTML = renderWaiting(state.board, openId("waiting"));
+    $("board").innerHTML = renderBoard(state.board, openId("bed"));
     $("nav-review-count").textContent = state.board.summary?.pending_suggestions || "";
-    const bed = state.openBed && findBed(state.board, state.openBed);
+
+    const bed = openId("bed") && findBed(state.board, openId("bed"));
+    const waiting = openId("waiting") && findWaiting(state.board, openId("waiting"));
     if (bed && bed.patient) {
       $("panel-content").innerHTML = renderPanel(bed, undefined, state.confirmDischarge);
       $("panel").classList.remove("hidden");
+    } else if (waiting && waiting.patient) {
+      $("panel-content").innerHTML = renderWaitingPanel(waiting);
+      $("panel").classList.remove("hidden");
     } else {
-      // The patient may have moved or been discharged since the link was made
+      // The patient may have moved, got a bed or been discharged since the link was made
       $("panel").classList.add("hidden");
     }
   }
 
-  function setOpenBed(bedId) {
-    state.openBed = bedId;
+  function setOpen(kind, id) {
+    state.open = kind && id ? { kind, id } : null;
     state.confirmDischarge = false;
-    history.replaceState(null, "", bedId ? `#bed=${encodeURIComponent(bedId)}` : location.pathname);
+    history.replaceState(null, "", state.open ? `#${kind}=${encodeURIComponent(id)}` : location.pathname);
     render();
-    if (bedId) $("panel").querySelector(".btn-close")?.focus();
+    if (state.open) $("panel").querySelector(".btn-close")?.focus();
   }
-  window.addEventListener("hashchange", () => { state.openBed = bedFromHash(); render(); });
+  window.addEventListener("hashchange", () => { state.open = openFromHash(); render(); });
 
   async function load() {
     try {
@@ -267,22 +350,30 @@ if (typeof document !== "undefined") {
     return data;
   }
 
+  // Decisions are recorded against a clinician, so ask for the ID before acting
+  function clinicianFor(what) {
+    const clinician = clinicianInput.value.trim();
+    if (!clinician) {
+      showError(`Enter your clinician ID in the sidebar before ${what}.`);
+      clinicianInput.focus();
+    }
+    return clinician;
+  }
+
   document.addEventListener("click", async event => {
     const target = event.target.closest("[data-action]");
-    if (!target) return;
+    if (!target || target.disabled) return;
     const action = target.dataset.action;
     try {
       if (action === "open") {
-        setOpenBed(target.dataset.bed);
+        setOpen("bed", target.dataset.bed);
+      } else if (action === "open-waiting") {
+        setOpen("waiting", target.dataset.request);
       } else if (action === "close") {
-        setOpenBed(null);
+        setOpen(null);
       } else if (action === "decide") {
-        const clinician = clinicianInput.value.trim();
-        if (!clinician) {
-          showError("Enter your clinician ID in the sidebar before deciding on a task.");
-          clinicianInput.focus();
-          return;
-        }
+        const clinician = clinicianFor("deciding on a task");
+        if (!clinician) return;
         target.disabled = true;
         await post(`/api/tasks/${encodeURIComponent(target.dataset.task)}/decision`,
                    { decision: target.dataset.decision, clinician_id: clinician });
@@ -291,15 +382,26 @@ if (typeof document !== "undefined") {
         state.confirmDischarge = action === "discharge-start";
         render();
       } else if (action === "discharge-confirm") {
-        const clinician = clinicianInput.value.trim();
-        if (!clinician) {
-          showError("Enter your clinician ID in the sidebar before discharging a patient.");
-          clinicianInput.focus();
-          return;
-        }
+        const clinician = clinicianFor("discharging a patient");
+        if (!clinician) return;
         target.disabled = true;
         await post(`/api/beds/${encodeURIComponent(target.dataset.bed)}/discharge`, { clinician_id: clinician });
-        setOpenBed(null);   // the patient has left the bed
+        setOpen(null);   // the patient has left the bed
+        await load();
+      } else if (action === "assign") {
+        const clinician = clinicianFor("assigning a bed");
+        if (!clinician) return;
+        target.disabled = true;
+        const result = await post(`/api/bed-requests/${encodeURIComponent(target.dataset.request)}/assign`,
+                                  { clinician_id: clinician });
+        await load();
+        setOpen("bed", result.reservation_id);   // show the patient in their new bed
+      } else if (action === "cancel-request") {
+        const clinician = clinicianFor("removing a patient from the waiting list");
+        if (!clinician) return;
+        target.disabled = true;
+        await post(`/api/bed-requests/${encodeURIComponent(target.dataset.request)}/cancel`, { clinician_id: clinician });
+        if (openId("waiting") === target.dataset.request) setOpen(null);
         await load();
       } else if (action === "mark-clean") {
         target.disabled = true;
@@ -312,10 +414,11 @@ if (typeof document !== "undefined") {
     }
   });
 
-  // Keyboard access for bed cards
+  // Keyboard access for bed cards and waiting-list rows
   document.addEventListener("keydown", event => {
-    if (event.key === "Escape" && state.openBed) setOpenBed(null);
-    if ((event.key === "Enter" || event.key === " ") && event.target.matches?.(".bed-card[data-action='open']")) {
+    if (event.key === "Escape" && state.open) setOpen(null);
+    if ((event.key === "Enter" || event.key === " ") &&
+        event.target.matches?.(".bed-card[data-action='open'], .waiting-row[data-action='open-waiting']")) {
       event.preventDefault();
       event.target.click();
     }

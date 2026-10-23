@@ -7,6 +7,7 @@ const INGESTION_URL = "http://127.0.0.1:5000/api/process-note";   // Flask inges
 const EMR_API = "http://127.0.0.1:3001";
 
 const ACUITY_LABELS = { critical: "Critical", serious: "Serious", stable: "Stable" };
+const WARD_LABELS = { icu: "ICU", observation: "observation", general: "general ward" };
 const ROUTE_LABELS = { oral: "Oral", iv: "IV", im: "IM", subcutaneous: "SC", inhaled: "Inhaled", topical: "Topical", other: "Other" };
 const ALERT_ICON = '<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 9v4M12 17h.01M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/></svg>';
 
@@ -30,12 +31,22 @@ function renderContext(p) {
     <dl class="facts" style="margin-top:${(p.allergies || []).length ? "12px" : "0"}">
       <dt>Patient</dt><dd><strong>${escapeHtml(p.name)}</strong>${p.age != null ? `, ${escapeHtml(p.age)}` : ""}</dd>
       <dt>Acuity</dt><dd>${p.acuity ? `<span class="acuity acuity-${escapeHtml(p.acuity)}">${escapeHtml(ACUITY_LABELS[p.acuity])}</span>` : "Not assessed"}</dd>
-      <dt>Bed</dt><dd>${p.bed ? `<a href="board.html#bed=${encodeURIComponent(p.bed.id)}">${escapeHtml(p.bed.resource_name)}</a> · ${escapeHtml(p.bed.wing)}` : "Not admitted"}</dd>
+      <dt>Bed</dt><dd>${renderBedFact(p)}</dd>
       <dt>Ward orders</dt><dd>${orders.length ? orders.map(m => `${m.route === "iv" ? "<b>IV</b> " : ""}${escapeHtml(m.drug)} ${escapeHtml(m.dose || "")}`).join("<br>") : "None"}</dd>
       <dt>Regular meds</dt><dd>${homeMeds.length ? list(homeMeds) : "None recorded"}</dd>
       <dt>History</dt><dd>${escapeHtml(p.medical_history || "None recorded")}</dd>
     </dl>
     <p class="context-note">A prescription that conflicts with a known allergy is halted for review, and nothing is changed.</p>`;
+}
+
+function renderBedFact(p) {
+  const w = p.waiting_for_bed;
+  const waitingLink = w ? `<a href="board.html#waiting=${encodeURIComponent(w.id)}">waiting for a${/^[aeiou]/i.test(WARD_LABELS[w.ward_type] || "") ? "n" : ""} ${escapeHtml(WARD_LABELS[w.ward_type] || w.ward_type)} bed</a>` : "";
+  if (p.bed) {
+    const bed = `<a href="board.html#bed=${encodeURIComponent(p.bed.id)}">${escapeHtml(p.bed.resource_name)}</a> · ${escapeHtml(p.bed.wing)}`;
+    return w ? `${bed}<br>${waitingLink.replace("waiting for", "Waiting for a transfer to")}` : bed;
+  }
+  return w ? waitingLink.replace(">waiting", ">Waiting") : "Not admitted";
 }
 
 function renderContextMissing(patientId) {
@@ -57,6 +68,10 @@ function describeAction(a) {
     const suggested = r.care_tasks_suggested || 0;
     return `Record updated: ${escapeHtml(parts.join(", "))}` +
            (suggested ? `. ${plural(suggested, "next step")} sent to the ward board for review` : "");
+  }
+  if (a.tool === "reserve_bed" && r.status === "queued") {
+    const label = WARD_LABELS[r.waiting_for] || r.waiting_for;
+    return `No ${escapeHtml(label)} bed free: added to the waiting list (position ${escapeHtml(r.position)})`;
   }
   if (a.tool === "reserve_bed") {
     const where = `${escapeHtml(r.allocation?.bed || r.reservation_id)} (${escapeHtml(r.allocation?.ward || "")})`;
@@ -88,7 +103,10 @@ function renderResult(data) {
   const record = executed.find(a => a.tool === "update_record")?.result?.params || {};
   const bed = executed.find(a => a.tool === "reserve_bed")?.result;
   const rx = record.prescriptions || [];
-  const actions = executed.map(a => `<li><span class="tick">✓</span><span>${describeAction(a)}</span></li>`)
+  const queued = executed.find(a => a.tool === "reserve_bed" && a.result?.status === "queued");
+  const actions = executed.map(a => a === queued
+      ? `<li><span class="pending">●</span><span>${describeAction(a)}</span></li>`
+      : `<li><span class="tick">✓</span><span>${describeAction(a)}</span></li>`)
     .concat(alerts.map(a => `<li><span class="cross">✕</span><span>${escapeHtml(a.message)}</span></li>`)).join("");
 
   return `${banner}
@@ -101,7 +119,8 @@ function renderResult(data) {
         : `<tr><td>${escapeHtml(r.drug)}</td><td>${escapeHtml(r.dosage || r.dose || "–")}</td><td>${escapeHtml(r.route || "–")}</td><td>${escapeHtml(r.frequency || "–")}</td></tr>`).join("")}
       </tbody></table>` : ""}
     ${data.result?.llm_reasoning ? `<details style="margin-top:14px"><summary class="small muted" style="cursor:pointer">Why the AI chose these actions</summary><p class="small" style="margin-top:8px">${escapeHtml(data.result.llm_reasoning)}</p></details>` : ""}
-    ${bed?.reservation_id ? `<p style="margin-top:14px"><a href="board.html#bed=${encodeURIComponent(bed.reservation_id)}">Open on the ward board →</a></p>` : ""}`;
+    ${bed?.reservation_id ? `<p style="margin-top:14px"><a href="board.html#bed=${encodeURIComponent(bed.reservation_id)}">Open on the ward board →</a></p>` : ""}
+    ${queued ? `<p style="margin-top:14px"><a href="board.html#waiting=${encodeURIComponent(queued.result.request_id)}">See the waiting list on the ward board →</a></p>` : ""}`;
 }
 
 // ---------- Controller (browser only) ----------
