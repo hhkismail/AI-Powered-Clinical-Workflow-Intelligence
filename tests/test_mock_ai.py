@@ -128,5 +128,5 @@ def test_other_uploads_are_refused_in_mock_mode(mock_ai, forwarded):
         "patient_id": "P", "doctor_id": "D", "file": (io.BytesIO(b"\x89PNG other"), "note.png")})
 
     assert resp.status_code == 400
-    assert "only read the sample files" in resp.get_json()["error"]
+    assert "only the sample files in docs/samples can be read" in resp.get_json()["error"]
     assert forwarded == []

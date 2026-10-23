@@ -30,6 +30,7 @@ class FakeQuery:
     def __init__(self, db, table):
         self.db, self.table, self.op = db, table, "select"
         self.filters, self.values, self.row_limit, self.columns = [], None, None, None
+        self.negate_next = False
 
     def select(self, columns="*"):
         # Like PostgREST, return only the requested columns, and fail on unknown
@@ -48,6 +49,25 @@ class FakeQuery:
 
     def eq(self, column, value):
         self.filters.append((column, lambda v, value=value: v == value))
+        return self
+
+    def delete(self):
+        self.op = "delete"
+        return self
+
+    def gte(self, column, value):
+        self.filters.append((column, lambda v, value=value: v is not None and v >= value))
+        return self
+
+    @property
+    def not_(self):
+        self.negate_next = True
+        return self
+
+    def is_(self, column, value):
+        # Only is_(column, "null") is used; not_.is_(...) negates it
+        negate, self.negate_next = self.negate_next, False
+        self.filters.append((column, lambda v, negate=negate: (v is None) != negate))
         return self
 
     def in_(self, column, values):
@@ -77,6 +97,9 @@ class FakeQuery:
             new_rows = [dict(r) for r in (self.values if isinstance(self.values, list) else [self.values])]
             rows.extend(new_rows)
             result.data = [dict(r) for r in new_rows]
+        elif self.op == "delete":
+            self.db.tables[self.table] = [r for r in rows if r not in matches]
+            result.data = [dict(r) for r in matches]
         elif self.op == "update":
             for row in matches:
                 row.update(self.values)

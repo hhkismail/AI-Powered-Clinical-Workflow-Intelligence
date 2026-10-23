@@ -12,4 +12,7 @@ uvicorn[standard]==0.54.0
 pydantic==2.13.3
 httpx==0.28.1
 
+# Vercel entrypoint (app.py): runs the Flask services inside the FastAPI app
+a2wsgi==1.10.10
+
 python-dotenv==1.2.1
