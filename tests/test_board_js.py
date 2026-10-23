@@ -218,3 +218,33 @@ def test_waiting_text_is_escaped(js):
 
     for html in (js("renderWaiting", {"waiting": [entry]}, None, 0), js("renderWaitingPanel", entry, 0)):
         assert "<img" not in html and "<script>" not in html
+
+
+# ---------- Stopping medications ----------
+
+def with_med_ids(bed):
+    bed = json.loads(json.dumps(bed))
+    for i, m in enumerate(bed["patient"]["medications"]):
+        m["id"] = f"m{i}"
+    return bed
+
+
+def test_drawer_offers_stop_on_each_medication_with_a_confirm_step(js):
+    bed = with_med_ids(RAJESH_BED)
+
+    plain = js("renderPanel", bed, 0, False, None)
+    assert 'data-action="stop-med-start" data-med="m0"' in plain and 'data-action="stop-med-confirm"' not in plain
+
+    confirming = js("renderPanel", bed, 0, False, "m0")
+    assert "Stop Heparin?" in confirming and 'data-action="stop-med-confirm" data-med="m0"' in confirming
+
+
+def test_stop_proposal_buttons_say_what_they_do(js):
+    task = {"id": "t9", "description": "Stop Doxycycline? Replaced by meropenem", "category": "medication",
+            "status": "suggested", "suggested_by": "ai", "proposed_action": "stop_medication"}
+
+    html = js("renderTask", task)
+
+    assert ">Stop it</button>" in html and ">Keep it</button>" in html
+    assert "AI proposes stopping this medication" in html
+    assert ">Accept</button>" not in html

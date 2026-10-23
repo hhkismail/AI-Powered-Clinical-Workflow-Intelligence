@@ -42,6 +42,9 @@ def board_db(fake_db):
          "status": "suggested", "suggested_by": "ai", "created_at": "2026-10-23T09:00:00Z",
          "decided_at": None, "decided_by": None},
     ]
+    for t in fake_db.tables["care_tasks"]:   # columns added in migration 005
+        t.setdefault("proposed_action", None)
+        t.setdefault("medication_order_id", None)
     return fake_db
 
 

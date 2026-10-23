@@ -126,3 +126,14 @@ def test_context_shows_waiting_for_a_bed(js):
 
     assert 'href="board.html#waiting=r1">Waiting for an ICU bed</a>' in js("renderContext", waiting)
     assert "Waiting for a transfer to an ICU bed" in js("renderContext", transfer)
+
+
+def test_result_lists_stopped_and_proposed_medications(js):
+    action = {"tool": "update_record", "result": {"params": {"diagnoses": [], "prescriptions": []},
+              "medications_stopped": ["Metoprolol"], "stops_proposed": 1, "discontinue_not_found": ["Warfarin"]}}
+
+    text = js("describeAction", action)
+
+    assert "Stopped as the note says: Metoprolol" in text
+    assert "1 medication stop proposed for a clinician to confirm" in text
+    assert "Not on the ward orders, so not stopped: Warfarin" in text

@@ -179,9 +179,12 @@ Output MUST be pure JSON.
    'stable'   - can be managed as an outpatient or routine follow-up.
 5. NEXT STEPS: In 'update_record', list the concrete next steps the note calls for (e.g. telemetry monitoring, labs, imaging, procedure prep, consults) as 'next_steps', each with a 'description' and a 'category' of 'prep', 'monitoring', 'lab', 'imaging', 'consult', 'medication' or 'other'.
    Only include steps the note states or directly implies; never invent new treatments. These are suggestions a clinician must approve.
+6. DISCONTINUATIONS: In 'update_record', list medications from the patient's Current Ward Orders that should stop as 'discontinue', each with 'drug', 'reason' and 'explicit'.
+   'explicit' is true only if the note itself says to stop, discontinue or hold that drug; set it to false if you are inferring the stop (e.g. the drug failed or is being replaced). Inferred stops are only proposed to a clinician.
+   Never discontinue a drug that is not in Current Ward Orders, and leave 'discontinue' empty if nothing should stop.
 
 # AVAILABLE TOOLS
-- 'update_record': (patient_id, diagnoses, prescriptions, acuity, next_steps)
+- 'update_record': (patient_id, diagnoses, prescriptions, acuity, next_steps, discontinue)
 - 'reserve_bed': (patient_id, ward_type, clinical_reason)
 - 'schedule_appointment': (patient_id, department, appointment_date (YYYY-MM-DD) or timeframe_days, reason)
 
@@ -191,7 +194,7 @@ Output ONLY valid JSON:
     "status": "success",
     "reasoning": "Explain your decision.",
     "actions": [
-        {"tool": "update_record", "params": {"patient_id": "...", "diagnoses": ["..."], "prescriptions": [{"drug": "...", "dosage": "...", "route": "...", "frequency": "..."}], "acuity": "serious", "next_steps": [{"description": "...", "category": "monitoring"}]}},
+        {"tool": "update_record", "params": {"patient_id": "...", "diagnoses": ["..."], "prescriptions": [{"drug": "...", "dosage": "...", "route": "...", "frequency": "..."}], "acuity": "serious", "next_steps": [{"description": "...", "category": "monitoring"}], "discontinue": [{"drug": "...", "reason": "...", "explicit": true}]}},
         {"tool": "reserve_bed", "params": {"patient_id": "...", "ward_type": "icu", "clinical_reason": "..."}}
     ],
     "system_alerts": []
@@ -421,7 +424,9 @@ def update_record(
     acuity: Optional[str] = None,
     next_steps: Optional[List[Any]] = None,
     raw_input: Optional[str] = None,
-    reasoning: Optional[str] = None
+    reasoning: Optional[str] = None,
+    discontinue: Optional[List[Any]] = None,
+    recorded_by: Optional[str] = None
 ) -> Dict[str, Any]:
     """
     Call mock API to update patient medical record.
@@ -435,6 +440,8 @@ def update_record(
         next_steps: Suggested care tasks for a clinician to approve
         raw_input: The original note text, kept for the audit trail
         reasoning: The LLM's explanation, kept for the audit trail
+        discontinue: Ward orders to stop; explicit stops are applied, inferred ones proposed
+        recorded_by: The doctor who wrote the note, recorded on explicit stops
 
     Returns:
         API response
@@ -447,7 +454,9 @@ def update_record(
         "acuity": acuity,
         "next_steps": next_steps or [],
         "raw_input": raw_input,
-        "reasoning": reasoning
+        "reasoning": reasoning,
+        "discontinue": discontinue or [],
+        "recorded_by": recorded_by
     }
     return call_mock_api("/api/update-record", data)
 
@@ -461,7 +470,8 @@ def execute_llm_actions(
     patient_id: str,
     raw_text: Optional[str] = None,
     reasoning: Optional[str] = None,
-    department: Optional[str] = None
+    department: Optional[str] = None,
+    doctor_id: Optional[str] = None
 ) -> Dict[str, Any]:
     """
     Execute actions returned by the LLM.
@@ -525,7 +535,9 @@ def execute_llm_actions(
                     next_steps=params.get("next_steps", []),
                     # From the request and the LLM response, not the LLM's params
                     raw_input=raw_text,
-                    reasoning=reasoning
+                    reasoning=reasoning,
+                    discontinue=params.get("discontinue", []),
+                    recorded_by=doctor_id
                 )
                 results["executed_actions"].append({
                     "tool": tool_name,
@@ -646,7 +658,7 @@ async def process_note(request: ProcessNoteRequest) -> ProcessNoteResponse:
             # The hospital API calls are blocking; keep them off the event loop
             execution_results = await run_in_threadpool(
                 execute_llm_actions, actions, patient_id, raw_text, llm_response.get("reasoning"),
-                request.metadata.department
+                request.metadata.department, request.metadata.doctor_id
             )
             executed = execution_results["executed_actions"]
             alerts = execution_results["alerts"]
