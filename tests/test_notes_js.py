@@ -162,3 +162,16 @@ def test_context_marks_ward_orders_with_allergy_warnings(js):
                                                   "allergy_warning": "Meropenem is a carbapenem; cross-reactivity possible"}]}
 
     assert 'class="allergy-inline" title="Meropenem is a carbapenem; cross-reactivity possible"' in js("renderContext", patient)
+
+
+def test_mock_ai_results_are_labelled(js):
+    mocked = {**SUCCESS, "ai": "mock"}
+
+    html = js("renderResult", mocked)
+    halted = js("renderResult", {"status": "halted_for_clarification", "ai": "mock", "system_alerts": [
+        {"type": "Clinical Safety Halt", "message": "Aspirin conflicts with the documented Aspirin allergy."}]})
+
+    assert "<strong>Mock AI mode</strong>Planned by keyword rules, not the LLM" in html
+    assert "Why the rules chose these actions" in html
+    assert "Mock AI mode" in halted
+    assert "Mock AI mode" not in js("renderResult", SUCCESS)

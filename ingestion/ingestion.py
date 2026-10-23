@@ -3,7 +3,7 @@ from flask_cors import CORS
 from dotenv import load_dotenv
 from datetime import datetime, timezone
 import requests as req
-import base64, os, sys, tempfile
+import base64, hashlib, os, sys, tempfile
 
 load_dotenv()
 
@@ -20,6 +20,30 @@ ORCHESTRATOR_URL = os.getenv("ORCHESTRATOR_URL", "http://127.0.0.1:8000/api/proc
 TIMEOUT          = int(os.getenv("TIMEOUT_SECONDS", 30))
 # Only image-capable model on Groq at the moment (preview, so it may be busy or retired)
 GROQ_VISION_MODEL = os.getenv("GROQ_VISION_MODEL", "qwen/qwen3.8-27b")
+SAMPLES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "docs", "samples")
+MEDIA = (".jpg", ".jpeg", ".png", ".mp3", ".wav", ".m4a")
+
+
+def mock_ai_enabled() -> bool:
+    """MOCK_AI=1: no Groq calls (see Ophia/mock_llm.py)."""
+    return os.getenv("MOCK_AI", "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def sample_transcript(path: str):
+    """The stored transcript of a bundled sample (docs/samples/<name>.txt), matched
+    by file content, or None. Mock AI mode has no OCR or speech model, so these
+    are the only uploads it can read."""
+    with open(path, "rb") as f:
+        digest = hashlib.sha256(f.read()).digest()
+    for name in sorted(os.listdir(SAMPLES_DIR)):
+        base, ext = os.path.splitext(name)
+        transcript = os.path.join(SAMPLES_DIR, base + ".txt")
+        if ext.lower() in MEDIA and os.path.exists(transcript):
+            with open(os.path.join(SAMPLES_DIR, name), "rb") as f:
+                if hashlib.sha256(f.read()).digest() == digest:
+                    with open(transcript, encoding="utf-8") as t:
+                        return t.read()
+    return None
 
 
 # ─────────────────────────────────────────────
@@ -110,8 +134,8 @@ def process_note():
         uploaded = request.files["file"]
         fname = uploaded.filename.lower()
 
-        needs_groq = fname.endswith((".jpg", ".jpeg", ".png", ".mp3", ".wav", ".m4a"))
-        if needs_groq and not GROQ_API_KEY:
+        needs_groq = fname.endswith(MEDIA)
+        if needs_groq and not GROQ_API_KEY and not mock_ai_enabled():
             return jsonify({"error": "GROQ_API_KEY is not set, so image/audio uploads can't be processed. Add your Groq key to .env."}), 500
 
         with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(fname)[1]) as tmp:
@@ -119,7 +143,14 @@ def process_note():
             tmp_path = tmp.name
 
         try:
-            if fname.endswith((".jpg", ".jpeg", ".png")):
+            if needs_groq and mock_ai_enabled():
+                extracted = sample_transcript(tmp_path)
+                if extracted is None:
+                    return jsonify({"error": "Mock AI mode can only read the sample files in docs/samples, since there's "
+                                             "no OCR or speech model without a Groq key. Type the note instead."}), 400
+                input_methods.append("audio" if fname.endswith((".mp3", ".wav", ".m4a")) else "image")
+
+            elif fname.endswith((".jpg", ".jpeg", ".png")):
                 extracted = ocr_image(tmp_path)
                 input_methods.append("image")
 

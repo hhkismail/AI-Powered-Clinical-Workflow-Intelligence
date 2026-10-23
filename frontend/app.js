@@ -110,6 +110,9 @@ function renderResult(data) {
   if (allergyWarnings.length && data.status !== "halted_for_clarification") {
     banner += `<div class="notice notice-warning"><strong>Allergy warning</strong>${allergyWarnings.map(a => `<div>${escapeHtml(a.message)}</div>`).join("")}</div>`;
   }
+  if (data.ai === "mock") {
+    banner += `<div class="notice notice-info"><strong>Mock AI mode</strong>Planned by keyword rules, not the LLM. Add a Groq key and turn off MOCK_AI for real extraction.</div>`;
+  }
   if (data.status === "halted_for_clarification") return banner;
 
   const record = executed.find(a => a.tool === "update_record")?.result?.params || {};
@@ -131,7 +134,7 @@ function renderResult(data) {
       ${rx.map(r => typeof r === "string" ? `<tr><td colspan="4">${escapeHtml(r)}</td></tr>`
         : `<tr><td>${escapeHtml(r.drug)}</td><td>${escapeHtml(r.dosage || r.dose || "–")}</td><td>${escapeHtml(r.route || "–")}</td><td>${escapeHtml(r.frequency || "–")}</td></tr>`).join("")}
       </tbody></table>` : ""}
-    ${data.result?.llm_reasoning ? `<details style="margin-top:14px"><summary class="small muted" style="cursor:pointer">Why the AI chose these actions</summary><p class="small" style="margin-top:8px">${escapeHtml(data.result.llm_reasoning)}</p></details>` : ""}
+    ${data.result?.llm_reasoning ? `<details style="margin-top:14px"><summary class="small muted" style="cursor:pointer">${data.ai === "mock" ? "Why the rules chose these actions" : "Why the AI chose these actions"}</summary><p class="small" style="margin-top:8px">${escapeHtml(data.result.llm_reasoning)}</p></details>` : ""}
     ${bed?.reservation_id ? `<p style="margin-top:14px"><a href="board.html#bed=${encodeURIComponent(bed.reservation_id)}">Open on the ward board →</a></p>` : ""}
     ${queued ? `<p style="margin-top:14px"><a href="board.html#waiting=${encodeURIComponent(queued.result.request_id)}">See the waiting list on the ward board →</a></p>` : ""}`;
 }

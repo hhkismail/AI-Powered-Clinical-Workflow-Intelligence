@@ -13,7 +13,7 @@ import pytest
 
 # load_dotenv() never overrides variables that are already set, even to "",
 # so these win over a developer's real .env.
-for var in ("SUPABASE_URL", "SUPABASE_KEY", "SUPABASE_SECRET_KEY", "ISMA_DB_URL", "ISMA_ANON_KEY", "ZAI_API_KEY"):
+for var in ("SUPABASE_URL", "SUPABASE_KEY", "SUPABASE_SECRET_KEY", "ISMA_DB_URL", "ISMA_ANON_KEY", "ZAI_API_KEY", "MOCK_AI"):
     os.environ[var] = ""
 os.environ["GROQ_API_KEY"] = "test-key"
 os.environ["MOCK_API_BASE_URL"] = "http://mock-emr.test"
