@@ -1,5 +1,12 @@
 // Point to the Flask ingestion server, NOT FastAPI
-const INGESTION_URL = "http://127.0.0.1:5000/api/process-note"; 
+const INGESTION_URL = "http://127.0.0.1:5000/api/process-note";
+
+// Everything rendered with innerHTML comes from the user or the LLM, so escape it first
+function escapeHtml(value) {
+  return String(value ?? "").replace(/[&<>"']/g, ch => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+  })[ch]);
+}
 
 document.getElementById("file-input").addEventListener("change", function () {
   document.getElementById("file-name").textContent =
@@ -45,8 +52,8 @@ async function submitNote() {
       body: form
     });
     
-    if (!res.ok) throw new Error(`Server error: ${res.status}`);
-    const backendData = await res.json();
+    const backendData = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(backendData.error || `Server error: ${res.status}`);
 
     // 2. Handle the AI Safety Halts
     if (backendData.status === "halted_for_clarification") {
@@ -84,7 +91,12 @@ async function submitNote() {
         }
     };
 
-    showStatus("success", "Note processed successfully.");
+    // partial_success: some actions ran, others were rejected or failed (listed in system_alerts)
+    if (backendData.status === "partial_success") {
+      showStatus("error", "Note processed, but some actions failed. See the alerts below.");
+    } else {
+      showStatus("success", "Note processed successfully.");
+    }
     displayResult(formattedData, { patientId, doctorId, department, priority });
 
   } catch (err) {
@@ -102,39 +114,42 @@ function displayResult(data, meta) {
   const alerts  = data.system_alerts || [];
 
   const alertHtml = alerts.length
-    ? `<div class="alert-box"><strong>System alert</strong><p>${alerts.join("<br>")}</p></div>`
+    ? `<div class="alert-box"><strong>System alert</strong><p>${alerts.map(a =>
+        typeof a === "string" ? escapeHtml(a) : `${escapeHtml(a.type)}: ${escapeHtml(a.message)}`
+      ).join("<br>")}</p></div>`
     : "";
 
   const rxRows = (cd.prescriptions_logged || []).map(rx => {
   // Fallback 1: If Groq just outputs a flat string instead of an object
   if (typeof rx === 'string') {
-    return `<tr><td>${rx}</td><td>-</td><td>-</td></tr>`;
+    return `<tr><td>${escapeHtml(rx)}</td><td>-</td><td>-</td></tr>`;
   }
-  
+
   // Fallback 2: Check every possible word Groq might use for the keys
   const drugName = rx.drug || rx.medication || rx.name || "Unknown";
   const dosage = rx.dosage || rx.dose || rx.amount || "-";
   const route = rx.route || rx.method || rx.frequency || "-";
 
-  return `<tr><td>${drugName}</td><td>${dosage}</td><td>${route}</td></tr>`;
+  return `<tr><td>${escapeHtml(drugName)}</td><td>${escapeHtml(dosage)}</td><td>${escapeHtml(route)}</td></tr>`;
 }).join("");
 
   const actionTags = actions.map(a =>
-    `<span class="badge">${a.tool}</span>`
+    `<span class="badge">${escapeHtml(a.tool)}</span>`
   ).join(" ");
 
-  
+  const statusColor = data.status === "success" ? "var(--color-text-success)" : "var(--color-text-danger, #b42318)";
+
   content.innerHTML = `
     ${alertHtml}
-    <div class="result-row"><span class="result-label">Patient</span><span class="result-value">${meta.patientId}</span></div>
-    <div class="result-row"><span class="result-label">Doctor</span><span class="result-value">${meta.doctorId}</span></div>
-    <div class="result-row"><span class="result-label">Department</span><span class="result-value">${meta.department}</span></div>
-    <div class="result-row"><span class="result-label">Priority</span><span class="result-value badge">${meta.priority}</span></div>
-    <div class="result-row"><span class="result-label">Status</span><span class="result-value" style="color:var(--color-text-success)">${data.status}</span></div>
+    <div class="result-row"><span class="result-label">Patient</span><span class="result-value">${escapeHtml(meta.patientId)}</span></div>
+    <div class="result-row"><span class="result-label">Doctor</span><span class="result-value">${escapeHtml(meta.doctorId)}</span></div>
+    <div class="result-row"><span class="result-label">Department</span><span class="result-value">${escapeHtml(meta.department)}</span></div>
+    <div class="result-row"><span class="result-label">Priority</span><span class="result-value badge">${escapeHtml(meta.priority)}</span></div>
+    <div class="result-row"><span class="result-label">Status</span><span class="result-value" style="color:${statusColor}">${escapeHtml(data.status)}</span></div>
     <div class="section-label" style="margin-top:14px">Symptoms</div>
-    <p style="font-size:13px;color:var(--color-text-secondary)">${(cd.symptoms || []).join(", ") || "None"}</p>
+    <p style="font-size:13px;color:var(--color-text-secondary)">${(cd.symptoms || []).map(escapeHtml).join(", ") || "None"}</p>
     <div class="section-label">Diagnosis codes</div>
-    <p style="font-size:13px;color:var(--color-text-secondary)">${(cd.diagnosis_codes || []).join(", ") || "None"}</p>
+    <p style="font-size:13px;color:var(--color-text-secondary)">${(cd.diagnosis_codes || []).map(escapeHtml).join(", ") || "None"}</p>
     <div class="section-label">Prescriptions</div>
     <table class="rx-table">
       <thead><tr><th>Drug</th><th>Dosage</th><th>Route</th></tr></thead>

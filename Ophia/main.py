@@ -5,11 +5,12 @@ FastAPI service that processes clinical notes and orchestrates hospital workflow
 
 import json
 import os
+from contextlib import asynccontextmanager
 from typing import Any, Dict, List, Optional
 from datetime import datetime
 
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import JSONResponse
+from fastapi import FastAPI
+from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 from dotenv import load_dotenv
 import httpx
@@ -18,10 +19,27 @@ import requests
 # Load the shared .env from the repo root, regardless of the working directory
 load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '.env'))
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Log startup information"""
+    print("\n" + "="*60)
+    print("Clinical Notes Automation Backend Starting...")
+    print("="*60)
+    print(f"Mock API Base URL: {MOCK_API_BASE_URL}")
+    print(f"Timeout: {TIMEOUT_SECONDS}s")
+    if get_groq_api_key():
+        print(f"✅ Groq API key loaded (model: {GROQ_CHAT_MODEL})")
+    else:
+        print("❌ ERROR: GROQ_API_KEY not found in environment! Add your Groq key to .env")
+    print("="*60 + "\n")
+    yield
+
+
 app = FastAPI(
     title="Clinical Notes Automation",
     description="AI Orchestrator for healthcare workflow automation",
-    version="1.0.0"
+    version="1.0.0",
+    lifespan=lifespan
 )
 
 from fastapi.middleware.cors import CORSMiddleware
@@ -79,12 +97,6 @@ class ProcessNoteResponse(BaseModel):
     )
 
 
-class MockAPIErrorResponse(BaseModel):
-    """Error response from mock APIs"""
-    status: str
-    message: str
-
-
 # ========================
 # CONFIGURATION
 # ========================
@@ -94,26 +106,38 @@ TIMEOUT_SECONDS = 60
 # Groq retires models regularly; override in .env without touching code
 GROQ_CHAT_MODEL = os.getenv("GROQ_CHAT_MODEL", "openai/gpt-oss-120b")
 
-# LLM System Prompt - exact as specified
-SYSTEM_PROMPT = """You are an elite Chief Medical Officer AI and autonomous workflow orchestrator. 
-Your objective is to ingest unstructured clinical notes and execute a hospital workflow by interacting with available tools.
-You operate under a strict JSON-only output mandate. 
-TOOLS: 'update_record', 'reserve_bed', 'schedule_appointment'.
-RULES:
-1. NO ASSUMPTIONS: Never guess a medication dosage.
-2. EXCEPTION HANDLING: If you encounter missing critical data (e.g., missing dosage), output a "halted_for_clarification" JSON."""
+
+def get_groq_api_key() -> Optional[str]:
+    """GROQ_API_KEY, falling back to the legacy ZAI_API_KEY name."""
+    return os.getenv("GROQ_API_KEY") or os.getenv("ZAI_API_KEY")
+
+
+class APIRejection(Exception):
+    """Raised when a hospital API rejects an action with 400 Bad Request."""
+    pass
 
 
 # ========================
 # LLM INTEGRATION
 # ========================
 
-import httpx
-import json
+def build_llm_prompt(patient_id: str, encounter_date: str, department: str, patient_history: str, raw_text: str) -> str:
+    """The user message sent to the LLM: note metadata, patient history, then the doctor's note."""
+    return f"""
+    PATIENT ID: {patient_id}
+    ENCOUNTER DATE: {encounter_date}
+    DEPARTMENT: {department}
 
-async def call_zai_glm(text: str) -> dict:
+    {patient_history}
+
+    NEW DOCTOR'S NOTE:
+    {raw_text}
+    """
+
+
+async def call_llm(text: str) -> dict:
     """Calls the Groq chat model (GROQ_CHAT_MODEL) for JSON extraction and action planning."""
-    api_key = os.getenv("ZAI_API_KEY") 
+    api_key = get_groq_api_key()
     
     # 1. NEW URL FOR GROQ
     url = "https://api.groq.com/openai/v1/chat/completions"
@@ -121,7 +145,7 @@ async def call_zai_glm(text: str) -> dict:
     if not api_key:
         return {
             "status": "halted_for_clarification",
-            "system_alerts": [{"type": "Configuration Error", "message": "ZAI_API_KEY is not set. Add your Groq API key to .env and restart the orchestrator."}]
+            "system_alerts": [{"type": "Configuration Error", "message": "GROQ_API_KEY is not set. Add your Groq API key to .env and restart the orchestrator."}]
         }
 
     headers = {
@@ -208,30 +232,33 @@ Output ONLY valid JSON:
 
 
 async def fetch_patient_history(patient_id: str) -> str:
-    """Fetches patient allergies, prescriptions, and history from Isma's database."""
+    """Fetches patient allergies, prescriptions, and history from the Supabase patients table."""
     db_url = os.getenv("ISMA_DB_URL")
     anon_key = os.getenv("ISMA_ANON_KEY")
-    
+
     if not db_url or not anon_key:
         return "PATIENT HISTORY: No prior records found."
 
+    # Supabase publishable keys go in the apikey header only (they aren't JWTs)
     headers = {
         "apikey": anon_key,
-        "Authorization": f"Bearer {anon_key}",
         "Content-Type": "application/json"
     }
-    
+
     try:
         async with httpx.AsyncClient(timeout=10) as client:
-            url = f"{db_url}/rest/v1/patients?patient_id=eq.{patient_id}"
-            response = await client.get(url, headers=headers)
+            # Pass the ID as a query param so it's URL-encoded, not spliced into the filter
+            response = await client.get(
+                f"{db_url}/rest/v1/patients",
+                params={"patient_id": f"eq.{patient_id}"},
+                headers=headers
+            )
             response.raise_for_status()
-            
+
             data = response.json()
             if data and len(data) > 0:
                 patient_record = data[0]
-                
-                # Extracting the exact columns from Isma's database
+
                 allergies = patient_record.get("allergies", [])
                 prescriptions = patient_record.get("active_prescriptions", [])
                 history = patient_record.get("medical_history", "None")
@@ -248,7 +275,7 @@ async def fetch_patient_history(patient_id: str) -> str:
                 return "PATIENT HISTORY: No prior records found."
                 
     except Exception as e:
-        print(f"[WARNING] Could not connect to Isma's database: {e}")
+        print(f"[WARNING] Could not fetch patient history from Supabase: {e}")
         return "PATIENT HISTORY: Unavailable at this time."
 
 
@@ -268,7 +295,7 @@ def call_mock_api(endpoint: str, data: Dict[str, Any]) -> Dict[str, Any]:
         Response JSON from the API
         
     Raises:
-        HTTPError with formatted error response for 400 Bad Request
+        APIRejection with the API's message for 400 Bad Request
     """
     url = f"{MOCK_API_BASE_URL}{endpoint}"
     
@@ -288,7 +315,7 @@ def call_mock_api(endpoint: str, data: Dict[str, Any]) -> Dict[str, Any]:
                 error_message = response.text or "Bad Request"
             
             # Return formatted error for orchestrator to handle
-            raise HTTPError(error_message)
+            raise APIRejection(error_message)
         
         response.raise_for_status()
         return response.json()
@@ -373,15 +400,17 @@ def update_record(
 def execute_llm_actions(actions: List[Dict[str, Any]], patient_id: str) -> Dict[str, Any]:
     """
     Execute actions returned by the LLM.
-    
+
     Dynamically calls the appropriate mock API based on the tool specified.
-    
+    Every action is attempted; a rejected or failed action is recorded as an
+    alert instead of discarding the actions that already succeeded.
+
     Args:
         actions: List of actions from LLM
         patient_id: Patient ID for context
-        
+
     Returns:
-        Dictionary with execution results
+        Dictionary with executed_actions and alerts
     """
     results = {
         "executed_actions": [],
@@ -411,8 +440,8 @@ def execute_llm_actions(actions: List[Dict[str, Any]], patient_id: str) -> Dict[
                     patient_id=params.get("patient_id", patient_id),
                     department=params.get("department"),
                     timeframe_days=params.get("timeframe_days"),
-                    appointment_date=params.get("appointment_date", "2026-05-08"), # Fallback date just in case
-                    reason=params.get("reason", "Orthopedics Follow-up")
+                    appointment_date=params.get("appointment_date"),
+                    reason=params.get("reason")
                 )
                 results["executed_actions"].append({
                     "tool": tool_name,
@@ -439,9 +468,11 @@ def execute_llm_actions(actions: List[Dict[str, Any]], patient_id: str) -> Dict[
                     "message": f"Tool '{tool_name}' not recognized"
                 })
                 
-        except HTTPError as e:
-            # Return halted_for_clarification on API rejection
-            raise HTTPError(str(e))
+        except APIRejection as e:
+            results["alerts"].append({
+                "type": "API Rejection",
+                "message": f"{tool_name} was rejected: {e}"
+            })
         except Exception as e:
             results["alerts"].append({
                 "type": "Execution Error",
@@ -449,15 +480,6 @@ def execute_llm_actions(actions: List[Dict[str, Any]], patient_id: str) -> Dict[
             })
     
     return results
-
-
-# ========================
-# CUSTOM EXCEPTIONS
-# ========================
-
-class HTTPError(Exception):
-    """Custom exception for HTTP errors from mock APIs"""
-    pass
 
 
 # ========================
@@ -495,29 +517,22 @@ async def process_note(request: ProcessNoteRequest) -> ProcessNoteResponse:
         print(f"[ORCHESTRATOR] Doctor: {request.metadata.doctor_id}")
         print(f"[ORCHESTRATOR] Department: {request.metadata.department}")
         
-        print(f"[ORCHESTRATOR] Fetching history for patient {patient_id} from Isma's DB...")
-        
-        # 1. Fetch the patient history from Isma's database
+        print(f"[ORCHESTRATOR] Fetching history for patient {patient_id} from Supabase...")
+
+        # 1. Fetch the patient history from the patients table
         patient_history = await fetch_patient_history(patient_id)
         
         # 2. Combine the history, metadata, and the new doctor's note
         # Extract the date from the timestamp for the encounter_date parameter
         encounter_date = request.metadata.timestamp[:10] 
         
-        enriched_prompt = f"""
-    PATIENT ID: {patient_id}
-    ENCOUNTER DATE: {encounter_date}
-    DEPARTMENT: {request.metadata.department}
+        enriched_prompt = build_llm_prompt(
+            patient_id, encounter_date, request.metadata.department, patient_history, raw_text
+        )
 
-    {patient_history}
-
-    NEW DOCTOR'S NOTE:
-    {raw_text}
-    """
-        
         # 3. Send the combined context to the AI Brain
         print(f"[ORCHESTRATOR] Calling LLM with enriched context...")
-        llm_response = await call_zai_glm(enriched_prompt)
+        llm_response = await call_llm(enriched_prompt)
         
         # Step 2: Check if LLM returned halted_for_clarification
         if llm_response.get("status") == "halted_for_clarification":
@@ -545,10 +560,22 @@ async def process_note(request: ProcessNoteRequest) -> ProcessNoteResponse:
         actions = llm_response.get("actions", [])
         if actions:
             print(f"[ORCHESTRATOR] Executing {len(actions)} actions from LLM...")
-            execution_results = execute_llm_actions(actions, patient_id)
-            
+            # The hospital API calls are blocking; keep them off the event loop
+            execution_results = await run_in_threadpool(execute_llm_actions, actions, patient_id)
+            executed = execution_results["executed_actions"]
+            alerts = execution_results["alerts"]
+
+            # Surface action failures at the top level so the dashboard shows them
+            if not alerts:
+                status = "success"
+            elif executed:
+                status = "partial_success"
+            else:
+                status = "halted_for_clarification"
+
             return ProcessNoteResponse(
-                status="success",
+                status=status,
+                system_alerts=[SystemAlert(**alert) for alert in alerts] or None,
                 result={
                     "llm_reasoning": llm_response.get("reasoning"),
                     "execution_results": execution_results
@@ -567,19 +594,6 @@ async def process_note(request: ProcessNoteRequest) -> ProcessNoteResponse:
                     }
                 }
             )
-    
-    except HTTPError as e:
-        # API rejection with specific error message
-        print(f"[ERROR] API Rejection: {str(e)}")
-        return ProcessNoteResponse(
-            status="halted_for_clarification",
-            system_alerts=[
-                SystemAlert(
-                    type="API Rejection",
-                    message=str(e)
-                )
-            ]
-        )
     
     except Exception as e:
         # Unexpected errors
@@ -605,31 +619,13 @@ async def health_check() -> Dict[str, str]:
     }
 
 
-# ========================
-# STARTUP/SHUTDOWN
-# ========================
-
-@app.on_event("startup")
-async def startup_event():
-    """Log startup information"""
-    print("\n" + "="*60)
-    print("Clinical Notes Automation Backend Starting...")
-    print("="*60)
-    print(f"Mock API Base URL: {MOCK_API_BASE_URL}")
-    print(f"Timeout: {TIMEOUT_SECONDS}s")
-    if os.getenv("ZAI_API_KEY"):
-        print("✅ Groq API key loaded (ZAI_API_KEY)")
-    else:
-        print("❌ ERROR: ZAI_API_KEY not found in environment! Add your Groq key to .env")
-    print("="*60 + "\n")
-
-
 if __name__ == "__main__":
     import uvicorn
-    
+
+    # reload needs an import string; bind to localhost since the API has no auth
     uvicorn.run(
-        app,
-        host="0.0.0.0",
+        "main:app",
+        host="127.0.0.1",
         port=8000,
         reload=True,
         log_level="info"

@@ -1,6 +1,6 @@
 import os
-import json
 import uuid
+from datetime import date, datetime, timedelta, timezone
 
 from flask import Flask, request, jsonify
 from flask_cors import CORS
@@ -8,7 +8,7 @@ from dotenv import load_dotenv
 from supabase import create_client
 
 app = Flask(__name__)
-# Enable CORS globally so Fitri and Anna's frontend doesn't get blocked
+# Enable CORS globally so the browser dashboard isn't blocked
 CORS(app)
 
 load_dotenv()
@@ -142,21 +142,39 @@ def schedule_appointment():
     dept = data.get('department') or 'General'
     appointment_id = str(uuid.uuid4())
 
+    # appointment_date must be YYYY-MM-DD; without it, derive the date from timeframe_days
+    timeframe_days = data.get('timeframe_days')
+    try:
+        timeframe_days = int(timeframe_days) if timeframe_days is not None else None
+        appointment_date = date.fromisoformat(data['appointment_date']) if data.get('appointment_date') else None
+    except (TypeError, ValueError):
+        return jsonify({
+            "status": "error",
+            "error_code": "INVALID_PARAMETER",
+            "message": "'appointment_date' must be YYYY-MM-DD and 'timeframe_days' must be a whole number."
+        }), 400
+
+    if appointment_date is None and timeframe_days is not None:
+        appointment_date = date.today() + timedelta(days=timeframe_days)
+
     try:
         supabase.table('appointments').insert({
             'id': appointment_id,
             'patient_id': patient_id,
             'department': dept,
-            'reason': data.get('reason', 'Routine Checkup')
+            'appointment_date': appointment_date.isoformat() if appointment_date else None,
+            'timeframe_days': timeframe_days,
+            'reason': data.get('reason') or 'Routine Checkup'
         }).execute()
-    except Exception:
+    except Exception as e:
+        print(f"[schedule-appointment] Supabase error: {e}")
         return supabase_query_failed_response("Unable to save the appointment to the database.")
 
     return jsonify({
         "status": "success",
         "appointment_id": appointment_id,
         "scheduled_details": {
-            "date": data.get('appointment_date'),
+            "date": appointment_date.isoformat() if appointment_date else None,
             "location": f"{dept} Clinic"
         },
         "message": "Appointment scheduled successfully."
@@ -184,9 +202,11 @@ def update_record():
         supabase.table('clinical_notes').insert({
             'id': record_id,
             'patient_id': data['patient_id'],
-            'structured_data': json.dumps(structured_data)
+            # Stored as a JSON object (jsonb), not a JSON-encoded string
+            'structured_data': structured_data
         }).execute()
-    except Exception:
+    except Exception as e:
+        print(f"[update-record] Supabase error: {e}")
         return supabase_query_failed_response("Unable to save the clinical note to the database.")
 
     # The frontend reads the extracted diagnoses/prescriptions back from 'params'
@@ -265,7 +285,7 @@ def get_ward_availability():
 
         return jsonify({
             "status": "success",
-            "timestamp": "2026-04-23T08:00:00Z",
+            "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
             "wards": wards
         }), 200
     except Exception:
