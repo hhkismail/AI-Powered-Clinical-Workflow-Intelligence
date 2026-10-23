@@ -225,3 +225,12 @@ def test_vercel_config_runs_the_reset_daily():
 
     assert config["crons"] == [{"path": "/api/cron/reset-demo", "schedule": "0 19 * * *"}]
     assert "app.py" in config["functions"]
+
+
+@pytest.mark.parametrize("page", ["/", "/board.html"])
+def test_pages_have_link_previews(deployed, page):
+    html = deployed.get(page).text
+
+    assert '<meta property="og:image" content="https://ophia-ward.vercel.app/og-image.png">' in html
+    assert '<meta property="og:title"' in html and '<meta property="og:description"' in html
+    assert deployed.get("/og-image.png").headers["content-type"] == "image/png"
