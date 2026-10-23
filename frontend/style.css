@@ -52,7 +52,8 @@ svg.icon {
   padding: 20px 14px; background: var(--surface); border-right: 1px solid var(--line);
 }
 .logo { display: flex; align-items: center; gap: 9px; padding: 0 10px 20px; font-size: 18px; font-weight: 700; letter-spacing: -0.01em; }
-.logo i { width: 12px; height: 12px; border-radius: 2px; background: var(--primary); }
+/* The pulse-ring mark (same drawing as logo.svg, coloured by the theme) */
+.logo svg { width: 24px; height: 24px; color: var(--primary); flex-shrink: 0; }
 .nav-section { padding: 14px 10px 6px; font-size: 11px; font-weight: 600; color: var(--ink-3); text-transform: uppercase; letter-spacing: 0.06em; }
 .sidebar nav { display: flex; flex-direction: column; gap: 2px; }
 .sidebar nav a {

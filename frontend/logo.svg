@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" role="img" aria-label="Ophia">
+  <!-- The "o" of Ophia with a heartbeat running through it -->
+  <circle cx="12" cy="12" r="9.25" stroke="#0b6672" stroke-width="2.5"/>
+  <path d="M4.5 12.5h4l1.6-3.5 2.6 7 1.8-3.5h5" stroke="#0b6672" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

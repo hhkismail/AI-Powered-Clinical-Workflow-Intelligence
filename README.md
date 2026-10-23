@@ -1,4 +1,6 @@
-# 🩺 Project OPHIA: AI-Powered Clinical Workflow Intelligence
+<img src="./frontend/logo.svg" alt="Ophia logo" width="56">
+
+# Ophia: AI-Powered Clinical Workflow Intelligence
 **UM Hackathon 2026 — Domain 1: AI Systems & Agentic Workflow Automation**
 
 OPHIA is a hackathon prototype of an AI clinical workflow orchestrator. It takes an unstructured clinical note (typed, photographed or dictated), uses an LLM to extract diagnoses and prescriptions, and turns them into hospital actions such as updating the patient record, reserving a bed or scheduling a follow-up. It's a demo and is not meant for clinical use.
