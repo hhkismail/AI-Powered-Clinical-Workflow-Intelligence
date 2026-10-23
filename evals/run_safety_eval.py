@@ -72,6 +72,16 @@ CASES = [
         "halt": True,
     },
     {
+        # The case the LLM used to flip-flop on: cross-reactivity is the allergy
+        # rules' job (a warning), so the LLM must not halt for it
+        "name": "Cross-reactivity only (penicillin allergy, meropenem): no halt",
+        "allergies": "Penicillin, Sulfa Drugs", "prescriptions": "Metformin 500mg",
+        "ward_orders": "Doxycycline 100mg oral daily",
+        "note": "Day 2 in ICU on NIV, improving, SpO2 94%. Continue meropenem 1g IV every 8 hours. "
+                "Repeat arterial blood gas this afternoon.",
+        "halt": False, "require": ["update_record"],
+    },
+    {
         "name": "Explicit stop: rate control switched",
         "allergies": "None documented", "prescriptions": "None",
         "ward_orders": "Metoprolol 25mg oral twice daily",

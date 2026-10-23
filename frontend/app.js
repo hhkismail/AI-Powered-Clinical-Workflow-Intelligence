@@ -32,7 +32,8 @@ function renderContext(p) {
       <dt>Patient</dt><dd><strong>${escapeHtml(p.name)}</strong>${p.age != null ? `, ${escapeHtml(p.age)}` : ""}</dd>
       <dt>Acuity</dt><dd>${p.acuity ? `<span class="acuity acuity-${escapeHtml(p.acuity)}">${escapeHtml(ACUITY_LABELS[p.acuity])}</span>` : "Not assessed"}</dd>
       <dt>Bed</dt><dd>${renderBedFact(p)}</dd>
-      <dt>Ward orders</dt><dd>${orders.length ? orders.map(m => `${m.route === "iv" ? "<b>IV</b> " : ""}${escapeHtml(m.drug)} ${escapeHtml(m.dose || "")}`).join("<br>") : "None"}</dd>
+      <dt>Ward orders</dt><dd>${orders.length ? orders.map(m => `${m.route === "iv" ? "<b>IV</b> " : ""}${escapeHtml(m.drug)} ${escapeHtml(m.dose || "")}` +
+        (m.allergy_warning ? ` <span class="allergy-inline" title="${escapeHtml(m.allergy_warning)}">${ALERT_ICON}allergy warning</span>` : "")).join("<br>") : "None"}</dd>
       <dt>Regular meds</dt><dd>${homeMeds.length ? list(homeMeds) : "None recorded"}</dd>
       <dt>History</dt><dd>${escapeHtml(p.medical_history || "None recorded")}</dd>
     </dl>
@@ -104,16 +105,22 @@ function renderResult(data) {
   } else {
     banner = `<div class="notice notice-success"><strong>Note processed</strong>The patient record and ward board are up to date.</div>`;
   }
+  // Possible allergy cross-reactivity doesn't stop a note, but it must be seen
+  const allergyWarnings = alerts.filter(a => a.type === "Allergy Warning");
+  if (allergyWarnings.length && data.status !== "halted_for_clarification") {
+    banner += `<div class="notice notice-warning"><strong>Allergy warning</strong>${allergyWarnings.map(a => `<div>${escapeHtml(a.message)}</div>`).join("")}</div>`;
+  }
   if (data.status === "halted_for_clarification") return banner;
 
   const record = executed.find(a => a.tool === "update_record")?.result?.params || {};
   const bed = executed.find(a => a.tool === "reserve_bed")?.result;
   const rx = record.prescriptions || [];
   const queued = executed.find(a => a.tool === "reserve_bed" && a.result?.status === "queued");
+  const failures = alerts.filter(a => a.type !== "Allergy Warning");
   const actions = executed.map(a => a === queued
       ? `<li><span class="pending">●</span><span>${describeAction(a)}</span></li>`
       : `<li><span class="tick">✓</span><span>${describeAction(a)}</span></li>`)
-    .concat(alerts.map(a => `<li><span class="cross">✕</span><span>${escapeHtml(a.message)}</span></li>`)).join("");
+    .concat(failures.map(a => `<li><span class="cross">✕</span><span>${escapeHtml(a.message)}</span></li>`)).join("");
 
   return `${banner}
     <div class="section-label">What was done</div>

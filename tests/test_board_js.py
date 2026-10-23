@@ -248,3 +248,17 @@ def test_stop_proposal_buttons_say_what_they_do(js):
     assert ">Stop it</button>" in html and ">Keep it</button>" in html
     assert "AI proposes stopping this medication" in html
     assert ">Accept</button>" not in html
+
+
+# ---------- Allergy warnings ----------
+
+def test_medication_with_an_allergy_warning_is_flagged_on_card_and_drawer(js):
+    bed = with_med_ids(RAJESH_BED)
+    bed["patient"]["medications"][0]["allergy_warning"] = "Heparin <warning> text"
+
+    card = js("renderBedCard", bed)
+    drawer = js("renderPanel", bed, 0, False, None)
+
+    assert 'class="med med-iv med-warn" title="Heparin &lt;warning&gt; text"' in card
+    assert '<div class="med-warning-text">' in drawer and "Heparin &lt;warning&gt; text" in drawer
+    assert "med-warn" not in js("renderBedCard", RAJESH_BED)
