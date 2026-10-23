@@ -36,9 +36,12 @@ The following documents are located in the root directory for review:
 ### Prerequisites
 * Python 3.12
 * A [Groq API key](https://console.groq.com/keys)
-* A Supabase project with the tables `patients`, `hospital_resources`, `appointments` and `clinical_notes` (the schema isn't included in this repo yet)
+* A Supabase project (the free tier is fine)
 
-### 1. Install dependencies
+### 1. Set up the database
+In your Supabase project's SQL editor, run [`db/schema.sql`](./db/schema.sql) to create the four tables, then [`db/seed.sql`](./db/seed.sql) for the demo patients and beds (all fictional).
+
+### 2. Install dependencies
 All three services share one `requirements.txt`:
 
 ```bash
@@ -47,23 +50,23 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
-### 2. Environment setup
+### 3. Environment setup
 Create a `.env` file in the repo root. Every service reads this same file:
 
 ```env
-# Groq API key (named ZAI_* for legacy reasons)
-ZAI_API_KEY=your_groq_key_here
+# Groq API key (ZAI_API_KEY is still accepted as the old name)
+GROQ_API_KEY=your_groq_key_here
 
 # Where the orchestrator sends hospital actions (the Mock EMR API)
 MOCK_API_BASE_URL=http://127.0.0.1:3001
 
-# Supabase, used by the Mock EMR API (server.py)
+# Supabase project URL and publishable key (Project Settings -> API Keys), used by server.py
 SUPABASE_URL=your_supabase_url
-SUPABASE_KEY=your_supabase_anon_key
+SUPABASE_KEY=your_supabase_publishable_key
 
 # Same Supabase project, used by the orchestrator for patient-history lookups
 ISMA_DB_URL=your_supabase_url
-ISMA_ANON_KEY=your_supabase_anon_key
+ISMA_ANON_KEY=your_supabase_publishable_key
 
 # Optional: override the Groq models if Groq retires one (see https://console.groq.com/docs/deprecations)
 # GROQ_CHAT_MODEL=openai/gpt-oss-120b
@@ -73,7 +76,7 @@ ISMA_ANON_KEY=your_supabase_anon_key
 # FLASK_DEBUG=1
 ```
 
-### 3. Launch
+### 4. Launch
 Run each service from the repo root in its own terminal:
 
 | Terminal | Service | Command |
@@ -102,11 +105,32 @@ The **OPHIA** Execution Loop:
 
 **PERSIST**: In Supabase, a new row appears in `clinical_notes` and the reserved bed in `hospital_resources` flips to `occupied`.
 
+Every run reserves a bed, so free them again between demos:
+
+```bash
+python tools/reset_demo.py            # add --dry-run to preview
+```
+
+---
+
+## ✅ Testing
+```bash
+pip install -r requirements-dev.txt
+pytest
+```
+The tests cover all three services with Supabase, Groq and the other services mocked, so they need no API keys. They run on every push and pull request via GitHub Actions.
+
+The LLM itself is checked separately by a **clinical safety eval**. It runs fixed notes through the real prompt and model and checks the decisions: halt on allergy conflicts, ICU vs observation beds, no bed for outpatients. It calls Groq, so run it by hand after changing the prompt or model:
+
+```bash
+python evals/run_safety_eval.py --runs 3
+```
+
 ---
 
 ## 🛡️ Safety Behaviour (and Current Limits)
 * **Allergy checks:** The patient's known allergies and active prescriptions are included in the LLM prompt, and the model is instructed to halt on a conflict. This check is done by the LLM, not by a deterministic rule.
-* **Halting:** If the LLM halts, or the hospital API rejects an action (e.g. no beds available), the request returns `halted_for_clarification` and the dashboard shows the alert.
+* **Halting:** If the LLM halts, the request returns `halted_for_clarification` and nothing is executed. If some actions succeed and others are rejected or fail (e.g. the record is saved but no bed is free), the request returns `partial_success`. The dashboard then lists exactly which actions failed; earlier actions aren't rolled back.
 * **Persistence:** Extracted diagnoses and prescriptions are saved to `clinical_notes`. The LLM's reasoning isn't stored yet, so there is no audit trail.
 * **No authentication:** The APIs have no auth and accept requests from any origin. Run them locally only.
 
