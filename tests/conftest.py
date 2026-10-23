@@ -43,7 +43,11 @@ class FakeQuery:
         return self
 
     def eq(self, column, value):
-        self.filters.append((column, value))
+        self.filters.append((column, lambda v, value=value: v == value))
+        return self
+
+    def in_(self, column, values):
+        self.filters.append((column, lambda v, values=list(values): v in values))
         return self
 
     def limit(self, n):
@@ -54,7 +58,7 @@ class FakeQuery:
         if self.db.fail or self.table in self.db.fail_tables:
             raise RuntimeError("simulated database outage")
         rows = self.db.tables.setdefault(self.table, [])
-        matches = [r for r in rows if all(r.get(c) == v for c, v in self.filters)]
+        matches = [r for r in rows if all(test(r.get(c)) for c, test in self.filters)]
 
         class Result:
             pass

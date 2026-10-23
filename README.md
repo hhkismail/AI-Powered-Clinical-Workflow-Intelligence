@@ -18,7 +18,7 @@ OPHIA runs as four small services:
 1.  **Ingestion Engine (Port 5000):** Flask-based gateway for multimodal data (OCR/Audio ingestion).
 2.  **The Orchestrator (Port 8000):** FastAPI "Brain" powered by **Groq (`openai/gpt-oss-120b`)** for clinical reasoning. Image notes are read with `qwen/qwen3.8-27b` and audio with `whisper-large-v3`.
 3.  **Mock EMR API (Port 3001):** The execution layer that routes AI commands to **Supabase** persistence.
-4.  **Clinical Dashboard (Port 5500):** A real-time visualization layer built with Vanilla JS for zero-dependency execution.
+4.  **Frontend (Port 5500):** Two vanilla JS pages, no build step. The **clinical notes** page submits notes; the **ward board** shows every bed live.
 
 ---
 
@@ -89,9 +89,21 @@ Run each service from the repo root in its own terminal:
 | 1 | Mock EMR API (3001) | `python server.py` |
 | 2 | Orchestrator (8000) | `uvicorn main:app --app-dir Ophia --reload --port 8000` |
 | 3 | Ingestion (5000) | `python ingestion/ingestion.py` |
-| 4 | Dashboard (5500) | `python -m http.server 5500 --directory frontend`, then open http://localhost:5500 |
+| 4 | Frontend (5500) | `python -m http.server 5500 --directory frontend`, then open http://localhost:5500 (notes) or http://localhost:5500/board.html (ward board) |
 
 Interactive API docs for the orchestrator are at http://localhost:8000/docs.
+
+---
+
+## 🛏️ Ward Board
+![Ward board with an open patient panel](./docs/ward-board.png)
+
+`board.html` shows every bed, grouped by wing, and refreshes every 5 seconds. Everything on it comes from processed notes; nothing is hardcoded.
+* **Bed cards:** status (available / occupied / being cleaned / maintenance), patient, **acuity** (critical / serious / stable, also shown by the card's colour), allergy warnings, active medications with **IV lines first**, accepted next steps, and how many AI suggestions are waiting.
+* **Patient panel:** click a card (or link to `board.html#bed=RES-ICU-01`) for history, all active medications and open tasks.
+* **Human in the loop:** AI-suggested next steps must be **accepted or rejected by a clinician** (enter your clinician ID at the top). Accepted tasks can be marked done. Each decision records who made it and when, and two clinicians can't both decide the same suggestion.
+* **Bed turnover:** when a patient is transferred, the old bed goes to *being cleaned*; **Mark clean** makes it available again.
+* **Security:** the board talks only to the Mock EMR API (`GET /api/ward-board`, `POST /api/tasks/<id>/decision`, `POST /api/beds/<id>/mark-clean`). The browser never gets a Supabase key.
 
 ---
 

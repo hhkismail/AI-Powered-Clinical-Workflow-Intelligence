@@ -7,6 +7,9 @@ header {
 }
 header h1 { font-size: 22px; font-weight: 600; }
 header p { font-size: 13px; opacity: 0.8; margin-top: 4px; }
+.page-header { display: flex; justify-content: space-between; align-items: center; gap: 16px; flex-wrap: wrap; }
+.page-header nav a { color: white; text-decoration: none; font-size: 14px; margin-left: 18px; opacity: 0.8; }
+.page-header nav a[aria-current="page"], .page-header nav a:hover { opacity: 1; text-decoration: underline; }
 
 main { max-width: 720px; margin: 32px auto; padding: 0 20px; }
 
