@@ -80,6 +80,9 @@ class FakeQuery:
         elif self.op == "update":
             for row in matches:
                 row.update(self.values)
+            if self.table in self.db.lose_reply_tables:
+                self.db.lose_reply_tables.discard(self.table)
+                raise ConnectionError("Server disconnected after the write")
             result.data = [dict(r) for r in matches]
         else:
             ordered = matches
@@ -102,6 +105,7 @@ class FakeSupabase:
         self.tables = tables or {}
         self.fail = False           # every query fails
         self.fail_tables = set()    # only queries on these tables fail
+        self.lose_reply_tables = set()  # writes apply, then the reply is lost (a dropped connection)
 
     def table(self, name):
         return FakeQuery(self, name)
