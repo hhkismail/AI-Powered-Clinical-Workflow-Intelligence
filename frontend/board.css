@@ -87,3 +87,27 @@
 .discharge-confirm p + p { margin-top: 4px; }
 .btn-danger { background: var(--crit); border-color: var(--crit); color: #fff; font-weight: 600; }
 .btn-danger:hover { background: #b42318; }
+
+/* Waiting for a bed: above the wings, because it needs action */
+.waiting { margin-bottom: 24px; border-color: #fedf89; }
+.waiting > h2 { display: flex; align-items: center; gap: 8px; background: #fffcf5; border-radius: var(--radius) var(--radius) 0 0; }
+.waiting > h2 span { font-size: 12px; font-weight: 700; color: #93370d; background: var(--ser-soft); border-radius: 999px; padding: 1px 8px; }
+.waiting-list { list-style: none; }
+.waiting-row {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 16px; align-items: center;
+  padding: 12px 18px; border-bottom: 1px solid var(--line-2); border-left: 3px solid var(--line); cursor: pointer;
+}
+.waiting-row:last-child { border-bottom: 0; border-radius: 0 0 var(--radius) var(--radius); }
+.waiting-row:hover { background: #fafbfc; }
+.waiting-row.is-open { background: var(--primary-soft); }
+.waiting-row.acuity-critical { border-left-color: var(--crit); }
+.waiting-row.acuity-serious { border-left-color: var(--ser); }
+.waiting-row.acuity-stable { border-left-color: var(--sta); }
+.waiting-row .patient-meta { font-weight: 400; }
+.waiting-row .allergy { margin-top: 4px; }
+.waiting-actions { display: flex; gap: 6px; }
+
+@media (max-width: 900px) {
+  .waiting-row { grid-template-columns: minmax(0, 1fr) auto; }
+  .waiting-actions { grid-column: 1 / -1; }
+}

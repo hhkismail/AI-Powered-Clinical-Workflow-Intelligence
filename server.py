@@ -125,10 +125,86 @@ def supabase_query_failed_response(message):
     }), 500
 
 # 1. Bed Reservation API
+# The LLM sends ward types like 'icu' or 'observation'; hospital_resources stores
+# bed types as ICU_BED / GEN_WARD. Observation beds are general ward beds.
+WARD_KINDS = {'icu': 'icu', 'icu_bed': 'icu', 'observation': 'observation',
+              'general': 'general', 'gen_ward': 'general'}
+BED_TYPES = {'icu': 'ICU_BED', 'observation': 'GEN_WARD', 'general': 'GEN_WARD'}
+WARD_LABELS = {'icu': 'ICU', 'observation': 'observation', 'general': 'general ward'}
+ACUITY_ORDER = {'critical': 0, 'serious': 1, 'stable': 2}
+
+
+def held_beds(patient_id):
+    """Beds the patient currently occupies."""
+    return supabase.table('hospital_resources') \
+        .select('id, resource_name, wing, resource_type, status') \
+        .eq('assigned_to_patient', patient_id).eq('status', 'occupied').execute().data or []
+
+
+def choose_bed(ward_kind, department=None):
+    """The most suitable free bed: an observation area if observation was asked for,
+    then the note's department, then the lowest ID. None if nothing is free."""
+    beds = supabase.table('hospital_resources') \
+        .select('id, resource_name, wing, department, resource_type, status') \
+        .eq('resource_type', BED_TYPES[ward_kind]).eq('status', 'available') \
+        .order('id').execute().data or []      # ordered, so the same request gets the same bed
+    department = str(department or '').strip().lower()
+
+    def preference(b):
+        in_observation = 'observation' in f"{b.get('wing') or ''} {b.get('resource_name') or ''}".lower()
+        same_department = bool(department) and str(b.get('department') or '').lower() == department
+        return (ward_kind == 'observation' and not in_observation, not same_department)
+
+    beds.sort(key=preference)
+    return beds[0] if beds else None
+
+
+def occupy_bed(bed_id, patient_id):
+    """Take the bed if it's still free. Re-checking the status in the update means
+    two requests can't both take it. Returns the updated row, or None."""
+    rows = supabase.table('hospital_resources') \
+        .update({'status': 'occupied', 'assigned_to_patient': patient_id}) \
+        .eq('id', bed_id).eq('status', 'available').execute().data or []
+    return rows[0] if rows else None
+
+
+def release_for_cleaning(beds):
+    """Transfer: the patient's previous beds need cleaning before reuse."""
+    for bed in beds:
+        supabase.table('hospital_resources').update({'status': 'cleaning', 'assigned_to_patient': None}) \
+            .eq('id', bed['id']).execute()
+
+
+def waiting_request(patient_id):
+    """The patient's open bed request, if they're on the waiting list."""
+    rows = supabase.table('bed_requests').select('id, ward_type, resource_type, requested_at') \
+        .eq('patient_id', patient_id).eq('status', 'waiting').execute().data or []
+    return rows[0] if rows else None
+
+
+def queue_position(request_row):
+    waiting = supabase.table('bed_requests').select('id, requested_at').eq('status', 'waiting').execute().data or []
+    return sum(1 for r in waiting if (r.get('requested_at') or '') <= (request_row.get('requested_at') or ''))
+
+
+def resolve_request(request_id, status, by, bed_id=None):
+    """Close a waiting request (assigned or cancelled). Returns the row, or None if it wasn't waiting."""
+    changes = {'status': status, 'resolved_at': datetime.now(timezone.utc).isoformat(), 'resolved_by': by}
+    if bed_id:
+        changes['assigned_bed_id'] = bed_id
+    rows = supabase.table('bed_requests').update(changes) \
+        .eq('id', request_id).eq('status', 'waiting').execute().data or []
+    return rows[0] if rows else None
+
+
+def allocation(bed):
+    return {"ward": bed.get('wing'), "bed": bed.get('resource_name'), "status": "occupied"}
+
+
 @app.route('/api/reserve-bed', methods=['POST'])
 def reserve_bed():
     data = request.get_json()
-    
+
     # Exception Handling: Catch missing parameters
     if not data or 'patient_id' not in data or 'ward_type' not in data:
         return missing_parameter_response("The reservation API requires 'patient_id' and 'ward_type'. You sent an incomplete payload.")
@@ -138,129 +214,167 @@ def reserve_bed():
 
     patient_id = data['patient_id']
     ward_type = data['ward_type']
-    resource_type = str(ward_type).strip().lower()
-
-    # The LLM sends ward types like 'icu' or 'observation'; hospital_resources
-    # stores bed types as ICU_BED / GEN_WARD. Observation beds are general ward beds.
-    ward_to_resource_map = {
-        'icu': 'ICU_BED',
-        'icu_bed': 'ICU_BED',
-        'observation': 'GEN_WARD',
-        'general': 'GEN_WARD',
-        'gen_ward': 'GEN_WARD'
-    }
-    mapped_resource_type = ward_to_resource_map.get(resource_type)
-
-    if mapped_resource_type is None:
+    ward_kind = WARD_KINDS.get(str(ward_type).strip().lower())
+    if ward_kind is None:
         return jsonify({
             "status": "error",
             "error_code": "INVALID_WARD_TYPE",
             "message": f"Unknown ward_type '{ward_type}'. Expected one of: icu, observation, general."
         }), 400
+    bed_type = BED_TYPES[ward_kind]
 
     try:
         # A patient holds one bed. Asking again for the same kind of bed (e.g. a
         # follow-up note) returns the current one; a different kind is a transfer.
-        current_beds = (
-            supabase.table('hospital_resources')
-            .select('id, resource_name, wing, resource_type, status')
-            .eq('assigned_to_patient', patient_id)
-            .eq('status', 'occupied')
-            .execute()
-        ).data or []
-        same_type = [b for b in current_beds if b['resource_type'] == mapped_resource_type]
+        current_beds = held_beds(patient_id)
+        same_type = [b for b in current_beds if b['resource_type'] == bed_type]
         if same_type:
-            bed = same_type[0]
             return jsonify({
                 "status": "success",
-                "reservation_id": bed['id'],
-                "allocation": {"ward": bed.get('wing'), "bed": bed.get('resource_name'), "status": "occupied"},
+                "reservation_id": same_type[0]['id'],
+                "allocation": allocation(same_type[0]),
                 "already_assigned": True,
                 "message": "The patient already has a bed of this type; no new bed was reserved."
             }), 200
 
-        available_beds = (
-            supabase.table('hospital_resources')
-            .select('id, resource_name, wing, department, resource_type, status')
-            .eq('resource_type', mapped_resource_type)
-            .eq('status', 'available')
-            .order('id')            # deterministic: the same request always gets the same bed
-            .execute()
-        ).data or []
-        # Observation, cardiac and triage beds all share GEN_WARD, so pick the most
-        # suitable free bed: an observation area if the note asks for observation,
-        # then the note's own department, then any (already in ID order).
-        department = str(data.get('department') or '').strip().lower()
+        bed = choose_bed(ward_kind, data.get('department'))
+        taken = occupy_bed(bed['id'], patient_id) if bed else None
 
-        def preference(b):
-            in_observation = 'observation' in f"{b.get('wing') or ''} {b.get('resource_name') or ''}".lower()
-            same_department = bool(department) and str(b.get('department') or '').lower() == department
-            return (resource_type == 'observation' and not in_observation, not same_department)
-
-        available_beds.sort(key=preference)
-
-        if not available_beds:
+        if taken:
+            release_for_cleaning(current_beds)
+            # A new note found a bed for a patient who was waiting: close their request
+            pending = waiting_request(patient_id)
+            if pending:
+                resolve_request(pending['id'], 'assigned', 'system', taken['id'])
             return jsonify({
-                "status": "error",
-                "error_code": "NO_BEDS_AVAILABLE",
-                "message": "No beds are available for the requested ward type."
-            }), 400
+                "status": "success",
+                "reservation_id": taken['id'],
+                "allocation": allocation(taken),
+                "transferred_from": [b['id'] for b in current_beds] or None,
+                "message": "Bed reserved successfully." + (" Previous bed released for cleaning." if current_beds else "")
+            }), 200
 
-        bed = available_beds[0]
-        # Re-check status in the update so two requests can't take the same bed
-        update_result = (
-            supabase.table('hospital_resources')
-            .update({'status': 'occupied', 'assigned_to_patient': patient_id})
-            .eq('id', bed['id'])
-            .eq('status', 'available')
-            .execute()
-        )
-        updated_rows = update_result.data or []
-
-        if not updated_rows:
-            return jsonify({
-                "status": "error",
-                "error_code": "NO_BEDS_AVAILABLE",
-                "message": "No beds are available for the requested ward type."
-            }), 400
-
-        updated_bed = updated_rows[0]
-
-        # Transfer: free the patient's previous bed. It needs cleaning before reuse.
-        for old_bed in current_beds:
-            supabase.table('hospital_resources') \
-                .update({'status': 'cleaning', 'assigned_to_patient': None}) \
-                .eq('id', old_bed['id']).execute()
-
+        # No suitable bed is free: put the patient on the waiting list rather than
+        # rejecting the admission. One open request per patient (a unique index).
+        pending = waiting_request(patient_id)
+        if not pending:
+            supabase.table('bed_requests').insert({
+                'id': str(uuid.uuid4()),
+                'status': 'waiting',
+                'requested_at': datetime.now(timezone.utc).isoformat(),
+                'patient_id': patient_id,
+                'ward_type': ward_kind,
+                'resource_type': bed_type,
+                'department': data.get('department'),
+                'clinical_reason': data.get('clinical_reason')
+            }).execute()
+            pending = waiting_request(patient_id)
+        position = queue_position(pending)
         return jsonify({
-            "status": "success",
-            "reservation_id": updated_bed['id'],
-            "allocation": {
-                "ward": updated_bed.get('wing'),
-                "bed": updated_bed.get('resource_name'),
-                "status": updated_bed.get('status', 'occupied')
-            },
-            "transferred_from": [b['id'] for b in current_beds] or None,
-            "message": "Bed reserved successfully." + (" Previous bed released for cleaning." if current_beds else "")
-        }), 200
+            "status": "queued",
+            "request_id": pending['id'],
+            "waiting_for": pending['ward_type'],
+            "position": position,
+            "current_bed": current_beds[0]['id'] if current_beds else None,
+            "message": f"No {WARD_LABELS[pending['ward_type']]} bed is free. "
+                       f"The patient was added to the waiting list (position {position})."
+        }), 202
     except Exception as e:
         print(f"[reserve-bed] Supabase error: {e}")
         # A dropped connection can lose the reply to a write that succeeded. A bed's
         # state can be checked, so look before reporting a failure that didn't happen.
         try:
-            held = supabase.table('hospital_resources').select('id, resource_name, wing, resource_type')                 .eq('assigned_to_patient', patient_id).eq('status', 'occupied').execute().data or []
+            held = held_beds(patient_id)
         except Exception:
             held = []
-        bed = next((b for b in held if b.get('resource_type') == mapped_resource_type), None)
+        bed = next((b for b in held if b.get('resource_type') == bed_type), None)
         if bed:
             print(f"[reserve-bed] {patient_id} does hold {bed['id']}; reporting success")
             return jsonify({
                 "status": "success",
                 "reservation_id": bed['id'],
-                "allocation": {"ward": bed.get('wing'), "bed": bed.get('resource_name'), "status": "occupied"},
+                "allocation": allocation(bed),
                 "message": "Bed reserved (confirmed after a database connection error)."
             }), 200
         return supabase_query_failed_response("Unable to reserve a bed from the database.")
+
+
+# 1a. Waiting list: assign a bed to a waiting patient, or remove them from the list
+@app.route('/api/bed-requests/<request_id>/assign', methods=['POST'])
+def assign_bed_request(request_id):
+    data = request.get_json(silent=True) or {}
+    clinician_id = str(data.get('clinician_id') or '').strip()
+    if not clinician_id:
+        return missing_parameter_response("Assigning a bed requires 'clinician_id'.")
+    if supabase is None:
+        return supabase_unavailable_response()
+
+    try:
+        rows = supabase.table('bed_requests').select('id, patient_id, ward_type, resource_type, department, status') \
+            .eq('id', request_id).execute().data or []
+        if not rows:
+            return jsonify({"status": "error", "error_code": "REQUEST_NOT_FOUND",
+                            "message": f"No bed request with id {request_id}."}), 404
+        req = rows[0]
+        if req['status'] != 'waiting':
+            return jsonify({"status": "error", "error_code": "INVALID_TRANSITION",
+                            "message": f"This request is already {req['status']}."}), 409
+
+        if data.get('bed_id'):
+            beds = supabase.table('hospital_resources').select('id, resource_name, wing, resource_type, status') \
+                .eq('id', data['bed_id']).execute().data or []
+            suitable = beds and beds[0]['status'] == 'available' and beds[0]['resource_type'] == req['resource_type']
+            if not suitable:
+                return jsonify({"status": "error", "error_code": "BED_NOT_SUITABLE",
+                                "message": f"{data['bed_id']} isn't a free {WARD_LABELS[req['ward_type']]} bed."}), 409
+            bed = beds[0]
+        else:
+            bed = choose_bed(req['ward_type'], req.get('department'))
+            if bed is None:
+                return jsonify({"status": "error", "error_code": "NO_BEDS_AVAILABLE",
+                                "message": f"No {WARD_LABELS[req['ward_type']]} bed is free yet."}), 409
+
+        previous = held_beds(req['patient_id'])
+        taken = occupy_bed(bed['id'], req['patient_id'])
+        if not taken:
+            return jsonify({"status": "error", "error_code": "NO_BEDS_AVAILABLE",
+                            "message": f"{bed['id']} was taken a moment ago; try again."}), 409
+        release_for_cleaning(previous)
+        resolve_request(request_id, 'assigned', clinician_id, taken['id'])
+    except Exception as e:
+        print(f"[assign-bed] Supabase error: {e}")
+        return supabase_query_failed_response("Unable to assign the bed.")
+
+    return jsonify({
+        "status": "success",
+        "patient_id": req['patient_id'],
+        "reservation_id": taken['id'],
+        "allocation": allocation(taken),
+        "transferred_from": [b['id'] for b in previous] or None,
+        "message": f"{req['patient_id']} assigned to {taken.get('resource_name') or taken['id']}."
+    }), 200
+
+
+@app.route('/api/bed-requests/<request_id>/cancel', methods=['POST'])
+def cancel_bed_request(request_id):
+    data = request.get_json(silent=True) or {}
+    clinician_id = str(data.get('clinician_id') or '').strip()
+    if not clinician_id:
+        return missing_parameter_response("Removing a patient from the waiting list requires 'clinician_id'.")
+    if supabase is None:
+        return supabase_unavailable_response()
+    try:
+        if resolve_request(request_id, 'cancelled', clinician_id):
+            return jsonify({"status": "success", "request": {"id": request_id, "status": "cancelled"}}), 200
+        existing = supabase.table('bed_requests').select('id, status').eq('id', request_id).execute().data or []
+    except Exception as e:
+        print(f"[cancel-request] Supabase error: {e}")
+        return supabase_query_failed_response("Unable to update the waiting list.")
+    if not existing:
+        return jsonify({"status": "error", "error_code": "REQUEST_NOT_FOUND",
+                        "message": f"No bed request with id {request_id}."}), 404
+    return jsonify({"status": "error", "error_code": "INVALID_TRANSITION",
+                    "message": f"This request is already {existing[0]['status']}."}), 409
 
 
 # 2. Scheduling API
@@ -430,6 +544,7 @@ def get_patient(patient_id):
             .eq('assigned_to_patient', patient_id).eq('status', 'occupied').execute().data or []
         medications = supabase.table('medication_orders').select('drug, dose, route, frequency') \
             .eq('patient_id', patient_id).eq('status', 'active').execute().data or []
+        bed_request = waiting_request(patient_id)
 
         return jsonify({
             "status": "success",
@@ -442,7 +557,8 @@ def get_patient(patient_id):
             "acuity": patient.get('acuity'),
             "acuity_updated_at": patient.get('acuity_updated_at'),
             "bed": beds[0] if beds else None,
-            "medication_orders": medications
+            "medication_orders": medications,
+            "waiting_for_bed": bed_request
         }), 200
     except Exception as e:
         print(f"[patient] Supabase error: {e}")
@@ -496,7 +612,12 @@ def get_ward_board():
         resources = supabase.table('hospital_resources') \
             .select('id, resource_name, resource_type, department, wing, status, assigned_to_patient') \
             .execute().data or []
-        patient_ids = sorted({r['assigned_to_patient'] for r in resources if r.get('assigned_to_patient')})
+        waiting = supabase.table('bed_requests') \
+            .select('id, patient_id, ward_type, resource_type, department, clinical_reason, requested_at') \
+            .eq('status', 'waiting').execute().data or []
+        # Patients in a bed and patients waiting for one (a transfer can be both)
+        patient_ids = sorted({r['assigned_to_patient'] for r in resources if r.get('assigned_to_patient')}
+                             | {w['patient_id'] for w in waiting})
 
         # One query per table for the whole board, not one per bed
         patients, medications, tasks = {}, {}, {}
@@ -517,19 +638,23 @@ def get_ward_board():
         print(f"[ward-board] Supabase error: {e}")
         return supabase_query_failed_response("Unable to load the ward board from the database.")
 
+    def patient_view(pid):
+        if pid not in patients:
+            return None
+        patient = dict(patients[pid])
+        # IV lines first: they're what nurses check most often
+        patient['medications'] = sorted(medications.get(pid, []),
+                                        key=lambda m: (m.get('route') != 'iv', m.get('started_at') or ''))
+        # Suggestions waiting for a decision first, then accepted work
+        patient['tasks'] = sorted(tasks.get(pid, []),
+                                  key=lambda t: (t['status'] != 'suggested', t.get('created_at') or ''))
+        return patient
+
     wings = {}
     # Within a wing, beds read in name order (Bay 01, Bay 02, ...), not ID order
     for r in sorted(resources, key=lambda r: (r.get('resource_name') or '', r['id'])):
-        patient = None
         pid = r.get('assigned_to_patient')
-        if pid and pid in patients:
-            patient = dict(patients[pid])
-            # IV lines first: they're what nurses check most often
-            patient['medications'] = sorted(medications.get(pid, []),
-                                            key=lambda m: (m.get('route') != 'iv', m.get('started_at') or ''))
-            # Suggestions waiting for a decision first, then accepted work
-            patient['tasks'] = sorted(tasks.get(pid, []),
-                                      key=lambda t: (t['status'] != 'suggested', t.get('created_at') or ''))
+        patient = patient_view(pid) if pid else None
         wings.setdefault(r.get('wing') or 'Unassigned', []).append({
             'id': r['id'],
             'name': r.get('resource_name'),
@@ -541,15 +666,40 @@ def get_ward_board():
 
     # Scanners (DIAGNOSTIC) are shown on the board but aren't beds, so they're not counted
     beds = [b for wing in wings.values() for b in wing if b['type'] in ('ICU_BED', 'GEN_WARD')]
-    occupants = [b['patient'] for b in beds if b['patient']]
+
+    # Waiting list: sickest first, then longest waiting
+    current_bed = {r['assigned_to_patient']: r for r in resources if r.get('assigned_to_patient')}
+    free_by_type = {t: sum(1 for r in resources if r['resource_type'] == t and r['status'] == 'available')
+                    for t in ('ICU_BED', 'GEN_WARD')}
+    waiting_list = []
+    for w in waiting:
+        patient = patient_view(w['patient_id'])
+        bed = current_bed.get(w['patient_id'])
+        waiting_list.append({
+            'request_id': w['id'],
+            'ward_type': w['ward_type'],
+            'department': w.get('department'),
+            'clinical_reason': w.get('clinical_reason'),
+            'requested_at': w.get('requested_at'),
+            'current_bed': {'id': bed['id'], 'name': bed.get('resource_name')} if bed else None,
+            'free_matching_beds': free_by_type.get(w['resource_type'], 0),
+            'patient': patient
+        })
+    waiting_list.sort(key=lambda w: (ACUITY_ORDER.get((w['patient'] or {}).get('acuity'), 3), w['requested_at'] or ''))
+
+    # Everyone the board shows, counted once (a patient waiting for a transfer is also in a bed)
+    shown = {p['patient_id']: p for p in [b['patient'] for b in beds if b['patient']] +
+             [w['patient'] for w in waiting_list if w['patient']]}.values()
     return jsonify({
         "status": "success",
         "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "summary": {
             "beds": {s: sum(b['status'] == s for b in beds) for s in ('available', 'occupied', 'cleaning', 'maintenance')},
-            "critical_patients": sum(p.get('acuity') == 'critical' for p in occupants),
-            "pending_suggestions": sum(t['status'] == 'suggested' for p in occupants for t in p['tasks'])
+            "critical_patients": sum(p.get('acuity') == 'critical' for p in shown),
+            "pending_suggestions": sum(t['status'] == 'suggested' for p in shown for t in p['tasks']),
+            "waiting": len(waiting_list)
         },
+        "waiting": waiting_list,
         # Wings with beds first, alphabetically; wings of only scanners (no beds) last
         "wards": [{"wing": wing, "beds": wings[wing]} for wing in sorted(
             wings, key=lambda w: (all(b['type'] == 'DIAGNOSTIC' for b in wings[w]), w))]
@@ -653,6 +803,10 @@ def discharge_patient(bed_id):
                 .eq('patient_id', patient_id).eq('status', status).execute().data or []
         supabase.table('patients').update({'acuity': None, 'acuity_updated_at': now}) \
             .eq('patient_id', patient_id).execute()
+        # A patient waiting for a transfer no longer needs the bed
+        pending = waiting_request(patient_id)
+        if pending:
+            resolve_request(pending['id'], 'cancelled', clinician_id)
     except Exception as e:
         print(f"[discharge] Supabase error closing the episode: {e}")
         return supabase_query_failed_response(

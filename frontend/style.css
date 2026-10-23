@@ -173,6 +173,7 @@ dl.facts dd { padding: 9px 0; border-bottom: 1px solid var(--line-2); }
 .result-actions li:last-child { border-bottom: 0; }
 .result-actions .tick { color: var(--sta); font-weight: 700; }
 .result-actions .cross { color: var(--crit); font-weight: 700; }
+.result-actions .pending { color: var(--ser); font-weight: 700; }
 .rx-table { width: 100%; border-collapse: collapse; font-size: 13px; }
 .rx-table th { text-align: left; font-size: 11px; font-weight: 600; color: var(--ink-3); text-transform: uppercase; letter-spacing: 0.05em; padding: 6px 8px 6px 0; border-bottom: 1px solid var(--line); }
 .rx-table td { padding: 8px 8px 8px 0; border-bottom: 1px solid var(--line-2); }
