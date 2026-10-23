@@ -35,6 +35,28 @@ def test_reserve_bed_maps_ward_type_to_stored_bed_type(client, fake_db, ward_typ
     assert bed(fake_db, expected_bed)["assigned_to_patient"] == "PT-30554"
 
 
+def test_reserve_bed_returns_existing_bed_instead_of_a_second_one(client, fake_db):
+    first = client.post("/api/reserve-bed", json={"patient_id": "PT-30554", "ward_type": "observation"}).get_json()
+
+    again = client.post("/api/reserve-bed", json={"patient_id": "PT-30554", "ward_type": "general"}).get_json()
+
+    assert again["reservation_id"] == first["reservation_id"]
+    assert again["already_assigned"] is True
+    beds_held = [b["id"] for b in fake_db.tables["hospital_resources"] if b["assigned_to_patient"] == "PT-30554"]
+    assert beds_held == [first["reservation_id"]]
+
+
+def test_reserve_bed_of_a_different_type_is_a_transfer(client, fake_db):
+    client.post("/api/reserve-bed", json={"patient_id": "PT-30554", "ward_type": "observation"})
+
+    resp = client.post("/api/reserve-bed", json={"patient_id": "PT-30554", "ward_type": "icu"}).get_json()
+
+    assert resp["reservation_id"] == "RES-ICU-01"
+    assert resp["transferred_from"] == ["RES-NEURO-01"]
+    old_bed = bed(fake_db, "RES-NEURO-01")
+    assert (old_bed["status"], old_bed["assigned_to_patient"]) == ("cleaning", None)
+
+
 @pytest.mark.parametrize("ward_type", ["cardiology", "diagnostic", ""])
 def test_reserve_bed_rejects_unknown_ward_type(client, ward_type):
     resp = client.post("/api/reserve-bed", json={"patient_id": "PT-30554", "ward_type": ward_type})
@@ -80,7 +102,139 @@ def test_update_record_stores_structured_data_as_json_object(client, fake_db):
     stored = fake_db.tables["clinical_notes"][0]
     assert stored["id"] == resp.get_json()["record_id"]
     # A dict, not a JSON-encoded string, so jsonb stores an object
-    assert stored["structured_data"] == {"diagnoses": payload["diagnoses"], "prescriptions": payload["prescriptions"]}
+    assert isinstance(stored["structured_data"], dict)
+    assert stored["structured_data"]["diagnoses"] == payload["diagnoses"]
+    assert stored["structured_data"]["prescriptions"] == payload["prescriptions"]
+
+
+# ---------- update-record: ward board data ----------
+
+FULL_NOTE = {
+    "patient_id": "PT-30554",
+    "diagnoses": ["Atrial fibrillation with RVR"],
+    "prescriptions": [
+        {"drug": "Metoprolol", "dosage": "25mg", "route": "orally", "frequency": "twice daily"},
+        {"drug": "Heparin", "dosage": "5000 units", "route": "IV drip", "frequency": "continuous"},
+        "Paracetamol 1g",
+    ],
+    "acuity": "Serious",
+    "next_steps": [
+        {"description": "Continuous telemetry monitoring", "category": "monitoring"},
+        {"description": "Prep for transthoracic echocardiogram", "category": "PREP"},
+        {"description": "Ask a friend", "category": "vibes"},
+    ],
+    "raw_input": "Admit to observation. Metoprolol 25mg PO BD...",
+    "reasoning": "AF with RVR needs monitored admission; no allergy conflict with metoprolol.",
+}
+
+
+def test_update_record_creates_medication_orders_with_normalized_routes(client, fake_db):
+    resp = client.post("/api/update-record", json=FULL_NOTE)
+
+    note_id = resp.get_json()["record_id"]
+    meds = fake_db.tables["medication_orders"]
+    assert resp.get_json()["medication_orders_created"] == 3
+    assert [(m["drug"], m["dose"], m["route"], m["frequency"]) for m in meds] == [
+        ("Metoprolol", "25mg", "oral", "twice daily"),
+        ("Heparin", "5000 units", "iv", "continuous"),
+        ("Paracetamol 1g", None, None, None),   # a bare string still becomes an order
+    ]
+    assert all(m["source_note_id"] == note_id and m["patient_id"] == "PT-30554" for m in meds)
+
+
+def test_update_record_does_not_duplicate_active_medication_orders(client, fake_db):
+    client.post("/api/update-record", json=FULL_NOTE)
+    follow_up = {**FULL_NOTE, "prescriptions": [
+        {"drug": "metoprolol", "dosage": "25 mg", "route": "PO"},     # same order, different wording
+        {"drug": "Metoprolol", "dosage": "50mg", "route": "oral"},    # dose change is a new order
+    ]}
+
+    resp = client.post("/api/update-record", json=follow_up)
+
+    assert resp.get_json()["medication_orders_created"] == 1
+    assert [m["dose"] for m in fake_db.tables["medication_orders"] if m["drug"].lower() == "metoprolol"] == ["25mg", "50mg"]
+
+
+def test_update_record_does_not_duplicate_open_care_tasks(client, fake_db):
+    client.post("/api/update-record", json=FULL_NOTE)
+    follow_up = {**FULL_NOTE, "next_steps": [
+        {"description": "continuous telemetry monitoring.", "category": "monitoring"},   # already open
+        {"description": "Repeat ECG in 6 hours", "category": "monitoring"},
+        {"description": "Repeat ECG in 6 hours", "category": "monitoring"},              # repeated within the note
+    ]}
+
+    resp = client.post("/api/update-record", json=follow_up)
+
+    assert resp.get_json()["care_tasks_suggested"] == 1
+    descriptions = [t["description"] for t in fake_db.tables["care_tasks"]]
+    assert descriptions.count("Repeat ECG in 6 hours") == 1
+    assert len(descriptions) == 4
+
+
+def test_rejected_task_can_be_suggested_again(client, fake_db):
+    client.post("/api/update-record", json=FULL_NOTE)
+    for t in fake_db.tables["care_tasks"]:
+        t["status"] = "rejected"
+
+    resp = client.post("/api/update-record", json=FULL_NOTE)
+
+    # Only suggested/accepted tasks block a repeat; a later note may re-raise a rejected one
+    assert resp.get_json()["care_tasks_suggested"] == 3
+
+
+def test_update_record_suggests_care_tasks_for_clinician_approval(client, fake_db):
+    client.post("/api/update-record", json=FULL_NOTE)
+
+    tasks = fake_db.tables["care_tasks"]
+    assert [(t["description"], t["category"]) for t in tasks] == [
+        ("Continuous telemetry monitoring", "monitoring"),
+        ("Prep for transthoracic echocardiogram", "prep"),
+        ("Ask a friend", "other"),   # unknown categories fall back instead of failing the insert
+    ]
+    # Nothing the AI suggests is a real task until a clinician accepts it
+    assert all(t["status"] == "suggested" and t["suggested_by"] == "ai" for t in tasks)
+
+
+def test_update_record_updates_patient_acuity(client, fake_db):
+    client.post("/api/update-record", json=FULL_NOTE)
+
+    patient = fake_db.tables["patients"][0]
+    assert patient["acuity"] == "serious"
+    assert patient["acuity_updated_at"] is not None
+
+
+def test_update_record_ignores_invalid_acuity(client, fake_db):
+    client.post("/api/update-record", json={**FULL_NOTE, "acuity": "pretty bad"})
+
+    assert fake_db.tables["patients"][0]["acuity"] is None
+    assert fake_db.tables["clinical_notes"][0]["structured_data"]["acuity"] is None
+
+
+def test_update_record_keeps_note_and_reasoning_for_the_audit_trail(client, fake_db):
+    client.post("/api/update-record", json=FULL_NOTE)
+
+    note = fake_db.tables["clinical_notes"][0]
+    assert note["raw_input"] == FULL_NOTE["raw_input"]
+    assert note["structured_data"]["reasoning"] == FULL_NOTE["reasoning"]
+
+
+def test_update_record_reports_when_ward_board_data_fails_after_note_is_saved(client, fake_db):
+    fake_db.fail_tables.add("medication_orders")
+
+    resp = client.post("/api/update-record", json=FULL_NOTE)
+
+    assert resp.status_code == 500
+    note_id = fake_db.tables["clinical_notes"][0]["id"]
+    assert note_id in resp.get_json()["message"]
+
+
+def test_server_prefers_the_secret_key(monkeypatch):
+    monkeypatch.setenv("SUPABASE_KEY", "sb_publishable_x")
+    monkeypatch.setenv("SUPABASE_SECRET_KEY", "sb_secret_x")
+    assert server.server_supabase_key() == "sb_secret_x"
+
+    monkeypatch.delenv("SUPABASE_SECRET_KEY")
+    assert server.server_supabase_key() == "sb_publishable_x"
 
 
 def test_update_record_requires_patient_id(client, fake_db):
