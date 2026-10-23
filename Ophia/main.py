@@ -5,6 +5,7 @@ FastAPI service that processes clinical notes and orchestrates hospital workflow
 
 import json
 import os
+import sys
 from contextlib import asynccontextmanager
 from typing import Any, Dict, List, Optional
 from datetime import datetime
@@ -19,6 +20,10 @@ import requests
 # Load the shared .env from the repo root, regardless of the working directory
 load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '.env'))
 
+# Write log lines straight away, even when output is redirected to a file
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(line_buffering=True)
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Log startup information"""
@@ -31,6 +36,11 @@ async def lifespan(app: FastAPI):
         print(f"✅ Groq API key loaded (model: {GROQ_CHAT_MODEL})")
     else:
         print("❌ ERROR: GROQ_API_KEY not found in environment! Add your Groq key to .env")
+    try:
+        supabase_config()
+        print("✅ Supabase secret key loaded (patient history and allergy checks)")
+    except PatientHistoryUnavailable as e:
+        print(f"❌ ERROR: {e}. Notes will be halted until it's fixed.")
     print("="*60 + "\n")
     yield
 
@@ -197,35 +207,52 @@ Output ONLY valid JSON:
         "response_format": { "type": "json_object" } # Forces Groq to output pure JSON
     }
     
+    # The model occasionally emits malformed JSON (Groq rejects it as
+    # json_validate_failed). That's a one-off glitch, so it gets one retry.
+    attempts = 2
     try:
         async with httpx.AsyncClient(timeout=30) as client:
-            print("[DEBUG] Sending request to Groq API... waiting for response.")
-            response = await client.post(url, headers=headers, json=payload)
-            response.raise_for_status()
-            
-            response_data = response.json()
-            glm_output_string = response_data['choices'][0]['message']['content']
-            
-            clean_json_string = glm_output_string.strip().replace("```json", "").replace("```", "").strip()
-            
-            try:
-                parsed_result = json.loads(clean_json_string)
-                if isinstance(parsed_result, dict):
-                    return parsed_result
-                else:
-                    return {"status": "success", "reasoning": str(parsed_result), "actions": []}
-            except json.JSONDecodeError:
-                print(f"\n[WARNING] AI sent non-JSON text: {glm_output_string[:200]}...")
-                return {
-                    "status": "halted_for_clarification",
-                    "system_alerts": [{"type": "AI Format Error", "message": "AI failed to return structured JSON."}]
-                }
-            
-    except httpx.HTTPStatusError as e:
-        print(f"[ERROR] API {e.response.status_code} Details: {e.response.text}")
+            for attempt in range(1, attempts + 1):
+                print(f"[DEBUG] Sending request to Groq API (attempt {attempt})...")
+                response = await client.post(url, headers=headers, json=payload)
+
+                if response.status_code == 400 and "json_validate_failed" in response.text:
+                    print(f"[WARNING] Groq rejected malformed JSON (attempt {attempt}): {response.text[:300]}")
+                    continue
+                response.raise_for_status()
+
+                output = response.json()['choices'][0]['message']['content']
+                cleaned = output.strip().replace("```json", "").replace("```", "").strip()
+                try:
+                    parsed = json.loads(cleaned)
+                except json.JSONDecodeError:
+                    print(f"[WARNING] AI sent non-JSON text (attempt {attempt}): {output[:200]}")
+                    continue
+                if isinstance(parsed, dict):
+                    return parsed
+                return {"status": "success", "reasoning": str(parsed), "actions": []}
+
         return {
             "status": "halted_for_clarification",
-            "system_alerts": [{"type": "AI Gateway Error", "message": f"API Error: {e.response.text}"}]
+            "system_alerts": [{"type": "AI Format Error",
+                               "message": f"The AI returned malformed output {attempts} times, so the note wasn't "
+                                          "processed and nothing was changed. Please submit it again."}]
+        }
+
+    except httpx.HTTPStatusError as e:
+        # Full details go to the log; the clinician gets a short, readable reason
+        print(f"[ERROR] API {e.response.status_code} Details: {e.response.text}")
+        try:
+            reason = e.response.json().get("error", {}).get("message", "")
+        except ValueError:
+            reason = ""
+        if e.response.status_code == 429:
+            message = "The AI service's rate limit was reached. Wait a few seconds and submit the note again."
+        else:
+            message = f"The AI service returned an error (HTTP {e.response.status_code}){': ' + reason[:200] if reason else ''}."
+        return {
+            "status": "halted_for_clarification",
+            "system_alerts": [{"type": "AI Gateway Error", "message": message}]
         }
     except Exception as e:
         error_type = type(e).__name__
@@ -237,52 +264,63 @@ Output ONLY valid JSON:
         }
 
 
+class PatientHistoryUnavailable(Exception):
+    """The patient's record couldn't be checked, so allergies can't be either."""
+    pass
+
+
+def supabase_config() -> tuple:
+    """URL and server-side secret key. Row-level security blocks the publishable key,
+    which would make every patient look like they have no record, so it's refused."""
+    url = os.getenv("SUPABASE_URL")
+    key = os.getenv("SUPABASE_SECRET_KEY")
+    if not url or not key:
+        raise PatientHistoryUnavailable("SUPABASE_URL and SUPABASE_SECRET_KEY must be set in .env")
+    if key.startswith("sb_publishable_"):
+        raise PatientHistoryUnavailable("SUPABASE_SECRET_KEY is a publishable key; use the sb_secret_ key")
+    return url, key
+
+
 async def fetch_patient_history(patient_id: str) -> str:
-    """Fetches patient allergies, prescriptions, and history from the Supabase patients table."""
-    db_url = os.getenv("ISMA_DB_URL")
-    anon_key = os.getenv("ISMA_ANON_KEY")
+    """
+    Patient allergies, regular medications, active ward orders and history, for the LLM.
 
-    if not db_url or not anon_key:
-        return "PATIENT HISTORY: No prior records found."
-
-    # Supabase publishable keys go in the apikey header only (they aren't JWTs)
-    headers = {
-        "apikey": anon_key,
-        "Content-Type": "application/json"
-    }
+    Returns "No prior records found" only when the patient genuinely has no record.
+    Raises PatientHistoryUnavailable when the record can't be checked, so a note is
+    never processed without its allergy check.
+    """
+    url, key = supabase_config()
+    # Supabase API keys go in the apikey header only (they aren't JWTs)
+    headers = {"apikey": key, "Content-Type": "application/json"}
 
     try:
         async with httpx.AsyncClient(timeout=10) as client:
             # Pass the ID as a query param so it's URL-encoded, not spliced into the filter
-            response = await client.get(
-                f"{db_url}/rest/v1/patients",
-                params={"patient_id": f"eq.{patient_id}"},
-                headers=headers
-            )
+            response = await client.get(f"{url}/rest/v1/patients",
+                                        params={"patient_id": f"eq.{patient_id}"}, headers=headers)
             response.raise_for_status()
-
-            data = response.json()
-            if data and len(data) > 0:
-                patient_record = data[0]
-
-                allergies = patient_record.get("allergies", [])
-                prescriptions = patient_record.get("active_prescriptions", [])
-                history = patient_record.get("medical_history", "None")
-                
-                # Formatting arrays into clean strings for the AI to read
-                allergies_str = ", ".join(allergies) if allergies else "None documented"
-                rx_str = ", ".join(prescriptions) if prescriptions else "None"
-                
-                return f"""PATIENT HISTORY (CRITICAL CONTEXT):
-- Known Allergies: {allergies_str}
-- Active Prescriptions: {rx_str}
-- Medical History: {history}"""
-            else:
+            rows = response.json()
+            if not rows:
                 return "PATIENT HISTORY: No prior records found."
-                
-    except Exception as e:
-        print(f"[WARNING] Could not fetch patient history from Supabase: {e}")
-        return "PATIENT HISTORY: Unavailable at this time."
+
+            orders = await client.get(f"{url}/rest/v1/medication_orders",
+                                      params={"patient_id": f"eq.{patient_id}", "status": "eq.active",
+                                              "select": "drug,dose,route,frequency"}, headers=headers)
+            orders.raise_for_status()
+    except httpx.HTTPError as e:
+        print(f"[ERROR] Could not fetch patient history from Supabase: {e}")
+        raise PatientHistoryUnavailable(f"the patient database couldn't be reached ({type(e).__name__})")
+
+    record = rows[0]
+    allergies = record.get("allergies") or []
+    prescriptions = record.get("active_prescriptions") or []
+    ward_orders = [" ".join(str(o[k]) for k in ("drug", "dose", "route", "frequency") if o.get(k)) for o in orders.json()]
+
+    return f"""PATIENT HISTORY (CRITICAL CONTEXT):
+- Known Allergies: {", ".join(allergies) if allergies else "None documented"}
+- Regular Medications: {", ".join(prescriptions) if prescriptions else "None"}
+- Current Ward Orders: {"; ".join(ward_orders) if ward_orders else "None"}
+- Medical History: {record.get("medical_history") or "None"}"""
 
 
 # ========================
@@ -552,8 +590,20 @@ async def process_note(request: ProcessNoteRequest) -> ProcessNoteResponse:
         
         print(f"[ORCHESTRATOR] Fetching history for patient {patient_id} from Supabase...")
 
-        # 1. Fetch the patient history from the patients table
-        patient_history = await fetch_patient_history(patient_id)
+        # 1. Fetch the patient history from the patients table. Without it the
+        # allergy check can't happen, so the note is halted rather than processed blind.
+        try:
+            patient_history = await fetch_patient_history(patient_id)
+        except PatientHistoryUnavailable as e:
+            print(f"[ORCHESTRATOR] Halting: patient history unavailable ({e})")
+            return ProcessNoteResponse(
+                status="halted_for_clarification",
+                system_alerts=[SystemAlert(
+                    type="Patient History Unavailable",
+                    message=f"{patient_id}'s allergies and current medications couldn't be checked: {e}. "
+                            "The note wasn't processed and nothing was changed."
+                )]
+            )
         
         # 2. Combine the history, metadata, and the new doctor's note
         # Extract the date from the timestamp for the encounter_date parameter

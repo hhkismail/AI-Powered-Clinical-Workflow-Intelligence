@@ -91,6 +91,12 @@ create index if not exists medication_orders_active_by_patient
 create index if not exists care_tasks_open_by_patient
     on public.care_tasks (patient_id) where status in ('suggested', 'accepted');
 
--- No policies: only the server-side secret key can access these tables
+-- ----- Access (migrations 001 and 003) -----
+-- Row-level security on every table with no policies: only the server-side
+-- secret key can read or write. The publishable key sees nothing.
+alter table public.patients enable row level security;
+alter table public.hospital_resources enable row level security;
+alter table public.clinical_notes enable row level security;
+alter table public.appointments enable row level security;
 alter table public.medication_orders enable row level security;
 alter table public.care_tasks enable row level security;

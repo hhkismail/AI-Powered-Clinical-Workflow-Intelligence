@@ -35,6 +35,22 @@ def test_reserve_bed_maps_ward_type_to_stored_bed_type(client, fake_db, ward_typ
     assert bed(fake_db, expected_bed)["assigned_to_patient"] == "PT-30554"
 
 
+def test_reserve_bed_reports_success_when_the_reply_to_a_successful_write_is_lost(client, fake_db):
+    fake_db.lose_reply_tables.add("hospital_resources")
+
+    resp = client.post("/api/reserve-bed", json={"patient_id": "PT-30554", "ward_type": "icu"})
+
+    assert resp.status_code == 200
+    assert resp.get_json()["reservation_id"] == "RES-ICU-01"
+    assert bed(fake_db, "RES-ICU-01")["assigned_to_patient"] == "PT-30554"
+
+
+def test_reserve_bed_still_fails_when_nothing_was_written(client, fake_db):
+    fake_db.fail_tables.add("hospital_resources")
+
+    assert client.post("/api/reserve-bed", json={"patient_id": "PT-30554", "ward_type": "icu"}).status_code == 500
+
+
 def test_reserve_bed_returns_existing_bed_instead_of_a_second_one(client, fake_db):
     first = client.post("/api/reserve-bed", json={"patient_id": "PT-30554", "ward_type": "observation"}).get_json()
 
@@ -268,13 +284,17 @@ def test_update_record_reports_when_ward_board_data_fails_after_note_is_saved(cl
     assert note_id in resp.get_json()["message"]
 
 
-def test_server_prefers_the_secret_key(monkeypatch):
-    monkeypatch.setenv("SUPABASE_KEY", "sb_publishable_x")
+def test_server_only_accepts_the_secret_key(monkeypatch):
     monkeypatch.setenv("SUPABASE_SECRET_KEY", "sb_secret_x")
     assert server.server_supabase_key() == "sb_secret_x"
 
+    # Row-level security makes the publishable key see empty tables, so it's refused
+    monkeypatch.setenv("SUPABASE_SECRET_KEY", "sb_publishable_x")
+    assert server.server_supabase_key() is None
+
     monkeypatch.delenv("SUPABASE_SECRET_KEY")
-    assert server.server_supabase_key() == "sb_publishable_x"
+    monkeypatch.setenv("SUPABASE_KEY", "sb_publishable_x")
+    assert server.server_supabase_key() is None
 
 
 def test_update_record_requires_patient_id(client, fake_db):
