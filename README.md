@@ -1,4 +1,6 @@
-# 🩺 Project OPHIA: AI-Powered Clinical Workflow Intelligence
+<img src="./frontend/logo.svg" alt="Ophia logo" width="56">
+
+# Ophia: AI-Powered Clinical Workflow Intelligence
 **UM Hackathon 2026 — Domain 1: AI Systems & Agentic Workflow Automation**
 
 OPHIA is a hackathon prototype of an AI clinical workflow orchestrator. It takes an unstructured clinical note (typed, photographed or dictated), uses an LLM to extract diagnoses and prescriptions, and turns them into hospital actions such as updating the patient record, reserving a bed or scheduling a follow-up. It's a demo and is not meant for clinical use.
@@ -39,7 +41,7 @@ The following documents are located in the root directory for review:
 * A Supabase project (the free tier is fine)
 
 ### 1. Set up the database
-In your Supabase project's SQL editor, run [`db/schema.sql`](./db/schema.sql) to create the tables, then [`db/seed.sql`](./db/seed.sql) for the demo patients and beds (all fictional).
+In your Supabase project's SQL editor, run [`db/schema.sql`](./db/schema.sql) to create the tables, then [`db/seed.sql`](./db/seed.sql) for the demo patients and a 24-bed ward (all fictional).
 
 If your database was created from an older version of `schema.sql`, apply the files in [`db/migrations/`](./db/migrations/) in order instead. Each one has a matching `.down.sql` rollback.
 
@@ -95,14 +97,26 @@ Interactive API docs for the orchestrator are at http://localhost:8000/docs.
 
 ---
 
+## 📝 Clinical Notes
+![Clinical notes page with patient context and a processed result](./docs/clinical-notes.png)
+
+`index.html` is where a clinician records a note: typed, or as a photo or voice memo.
+* **Patient context:** as you type a patient ID, their allergies, acuity, current bed, ward medication orders and history load alongside the form, so an allergy is visible *before* you prescribe.
+* **Photos and voice memos:** attach a photo of a handwritten note (read with a vision model) or a voice memo (transcribed with Whisper). Anything typed alongside is kept and combined with it. Try [`docs/samples/handwritten_note.jpg`](./docs/samples/handwritten_note.jpg) for `PT-40992`, or [`docs/samples/voice_memo.wav`](./docs/samples/voice_memo.wav) for `PT-10934`. The memo prescribes amoxicillin to a patient with a penicillin allergy, so it's halted for review.
+* **Clear results:** after processing you see exactly what happened: the record updated, the bed reserved (or why not), the follow-ups booked, how many next steps went to the ward board, the extracted prescriptions, and the AI's reasoning. Partial failures and safety halts are spelled out rather than hidden.
+
+---
+
 ## 🛏️ Ward Board
 ![Ward board with an open patient panel](./docs/ward-board.png)
 
-`board.html` shows every bed, grouped by wing, and refreshes every 5 seconds. Everything on it comes from processed notes; nothing is hardcoded.
+`board.html` shows all 24 beds across four wards, plus the scanners, and refreshes every 5 seconds. Everything on it comes from processed notes; nothing is hardcoded.
 * **Bed cards:** status (available / occupied / being cleaned / maintenance), patient, **acuity** (critical / serious / stable, also shown by the card's colour), allergy warnings, active medications with **IV lines first**, accepted next steps, and how many AI suggestions are waiting.
 * **Patient panel:** click a card (or link to `board.html#bed=RES-ICU-01`) for history, all active medications and open tasks.
-* **Human in the loop:** AI-suggested next steps must be **accepted or rejected by a clinician** (enter your clinician ID at the top). Accepted tasks can be marked done. Each decision records who made it and when, and two clinicians can't both decide the same suggestion.
-* **Bed turnover:** when a patient is transferred, the old bed goes to *being cleaned*; **Mark clean** makes it available again.
+* **Human in the loop:** AI-suggested next steps must be **accepted or rejected by a clinician** (enter your clinician ID in the sidebar; it's shared with the notes page). Accepted tasks can be marked done. Each decision records who made it and when, and two clinicians can't both decide the same suggestion.
+* **Discharge:** *Discharge patient* in the drawer (with a confirm step) frees the bed for cleaning, marks the patient's ward medications completed and cancels open tasks. Nothing is deleted, and the clinician ID is recorded.
+* **Bed turnover:** after a discharge or transfer the bed goes to *being cleaned*; **Mark clean** makes it available again. Free beds show as compact tiles so a full ward stays scannable.
+* **Bed allocation:** admissions get a bed in an observation area when the note asks for observation, otherwise in the note's own department (Emergency → triage, Cardiology → cardiac bays). The database rejects an "occupied" bed with no patient in it.
 * **Security:** the board talks only to the Mock EMR API (`GET /api/ward-board`, `POST /api/tasks/<id>/decision`, `POST /api/beds/<id>/mark-clean`). The browser never gets a Supabase key.
 
 ---

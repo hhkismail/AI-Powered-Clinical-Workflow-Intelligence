@@ -14,11 +14,11 @@ def board_db(fake_db):
     beds["RES-CARD-01"].update(status="cleaning", assigned_to_patient=None)
     fake_db.tables["patients"] = [
         {"patient_id": "PT-30554", "name": "Rajesh Kumar", "age": 62, "allergies": ["Aspirin"],
-         "medical_history": "Post-MI", "acuity": "serious", "acuity_updated_at": "2026-10-23T08:00:00Z"},
+         "active_prescriptions": ["Atorvastatin"], "medical_history": "Post-MI", "acuity": "serious", "acuity_updated_at": "2026-10-23T08:00:00Z"},
         {"patient_id": "PT-20221", "name": "Siti Aminah", "age": 8, "allergies": ["Latex"],
-         "medical_history": "Asthma", "acuity": "critical", "acuity_updated_at": "2026-10-23T09:00:00Z"},
+         "active_prescriptions": [], "medical_history": "Asthma", "acuity": "critical", "acuity_updated_at": "2026-10-23T09:00:00Z"},
         {"patient_id": "PT-40992", "name": "Michael Wong", "age": 29, "allergies": [],
-         "medical_history": None, "acuity": "stable", "acuity_updated_at": None},
+         "active_prescriptions": [], "medical_history": None, "acuity": "stable", "acuity_updated_at": None},
     ]
     fake_db.tables["medication_orders"] = [
         {"id": "m1", "patient_id": "PT-30554", "drug": "Metoprolol", "dose": "25mg", "route": "oral",
@@ -60,7 +60,8 @@ def board_bed(board, bed_id):
 def test_board_groups_beds_by_wing(client):
     board = client.get("/api/ward-board").get_json()
 
-    assert [w["wing"] for w in board["wards"]] == ["Diagnostic Block", "Observation Wing B", "West Wing", "Wing A"]
+    # Bed wings alphabetically; the scanner-only Diagnostic Block goes last
+    assert [w["wing"] for w in board["wards"]] == ["Observation Wing B", "West Wing", "Wing A", "Diagnostic Block"]
     assert board_bed(board, "RES-NEURO-01")["name"] == "Observation Bed 01"
 
 
@@ -89,7 +90,8 @@ def test_board_empty_beds_have_no_patient(client):
 def test_board_summary(client):
     summary = client.get("/api/ward-board").get_json()["summary"]
 
-    assert summary["beds"] == {"available": 1, "occupied": 2, "cleaning": 1, "maintenance": 0}
+    # The MRI suite is on the board but isn't a bed, so it isn't counted as an available bed
+    assert summary["beds"] == {"available": 0, "occupied": 2, "cleaning": 1, "maintenance": 0}
     assert summary["critical_patients"] == 1
     assert summary["pending_suggestions"] == 2
 
@@ -111,6 +113,26 @@ def test_board_reports_database_failure(client, board_db):
 
     assert resp.status_code == 500
     assert resp.get_json()["error_code"] == "SUPABASE_QUERY_FAILED"
+
+
+# ---------- GET /api/patient/<id> (patient context on the notes page) ----------
+
+def test_patient_includes_acuity_bed_and_active_medications(client):
+    p = client.get("/api/patient/PT-30554").get_json()
+
+    assert (p["name"], p["acuity"], p["allergies"]) == ("Rajesh Kumar", "serious", ["Aspirin"])
+    assert p["bed"] == {"id": "RES-NEURO-01", "resource_name": "Observation Bed 01", "wing": "Observation Wing B"}
+    assert [m["drug"] for m in p["medication_orders"]] == ["Metoprolol", "Heparin"]   # stopped orders excluded
+
+
+def test_patient_without_bed_or_orders(client):
+    p = client.get("/api/patient/PT-40992").get_json()
+
+    assert p["bed"] is None and p["medication_orders"] == []
+
+
+def test_unknown_patient_is_404(client):
+    assert client.get("/api/patient/PT-NOPE").status_code == 404
 
 
 # ---------- POST /api/tasks/<id>/decision ----------
@@ -186,3 +208,53 @@ def test_only_beds_being_cleaned_can_be_marked_clean(client):
 
     assert resp.status_code == 409
     assert client.post("/api/beds/RES-NOPE/mark-clean").status_code == 404
+
+
+# ---------- POST /api/beds/<id>/discharge ----------
+
+def test_discharge_frees_the_bed_and_closes_the_episode(client, board_db):
+    resp = client.post("/api/beds/RES-NEURO-01/discharge", json={"clinician_id": "DR-7742"})
+
+    body = resp.get_json()
+    assert resp.status_code == 200
+    assert (body["patient_id"], body["medication_orders_completed"], body["care_tasks_cancelled"]) == ("PT-30554", 2, 2)
+    bed = next(b for b in board_db.tables["hospital_resources"] if b["id"] == "RES-NEURO-01")
+    assert (bed["status"], bed["assigned_to_patient"]) == ("cleaning", None)
+    rajesh_meds = {m["id"]: m["status"] for m in board_db.tables["medication_orders"] if m["patient_id"] == "PT-30554"}
+    assert rajesh_meds == {"m1": "completed", "m2": "completed", "m3": "stopped"}   # history kept, nothing deleted
+    tasks = {t["id"]: (t["status"], t.get("decided_by")) for t in board_db.tables["care_tasks"] if t["patient_id"] == "PT-30554"}
+    assert tasks == {"t1": ("cancelled", "DR-7742"), "t2": ("cancelled", "DR-7742"), "t3": ("done", None)}
+    assert next(p for p in board_db.tables["patients"] if p["patient_id"] == "PT-30554")["acuity"] is None
+
+
+def test_discharge_leaves_other_patients_alone(client, board_db):
+    client.post("/api/beds/RES-NEURO-01/discharge", json={"clinician_id": "DR-7742"})
+
+    assert next(t for t in board_db.tables["care_tasks"] if t["id"] == "t4")["status"] == "suggested"
+    assert next(b for b in board_db.tables["hospital_resources"] if b["id"] == "RES-ICU-01")["assigned_to_patient"] == "PT-20221"
+
+
+def test_discharged_patient_disappears_from_board_and_bed_can_be_cleaned(client):
+    client.post("/api/beds/RES-NEURO-01/discharge", json={"clinician_id": "DR-7742"})
+    board = client.get("/api/ward-board").get_json()
+    assert board_bed(board, "RES-NEURO-01")["patient"] is None
+
+    assert client.post("/api/beds/RES-NEURO-01/mark-clean").status_code == 200
+    assert board_bed(client.get("/api/ward-board").get_json(), "RES-NEURO-01")["status"] == "available"
+
+
+def test_discharge_requires_a_clinician(client, board_db):
+    assert client.post("/api/beds/RES-NEURO-01/discharge", json={}).status_code == 400
+    assert next(b for b in board_db.tables["hospital_resources"] if b["id"] == "RES-NEURO-01")["status"] == "occupied"
+
+
+@pytest.mark.parametrize("bed_id, code", [("RES-CARD-01", 409), ("RES-MRI-01", 409), ("RES-NOPE", 404)])
+def test_discharge_only_from_an_occupied_bed(client, bed_id, code):
+    assert client.post(f"/api/beds/{bed_id}/discharge", json={"clinician_id": "DR-7742"}).status_code == code
+
+
+def test_second_discharge_of_the_same_bed_is_refused(client):
+    first = client.post("/api/beds/RES-NEURO-01/discharge", json={"clinician_id": "DR-1"})
+    second = client.post("/api/beds/RES-NEURO-01/discharge", json={"clinician_id": "DR-2"})
+
+    assert (first.status_code, second.status_code) == (200, 409)

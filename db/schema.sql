@@ -26,7 +26,10 @@ create table if not exists public.hospital_resources (
     department          text,
     wing                text,
     status              text check (status in ('available', 'occupied', 'maintenance', 'cleaning')),
-    assigned_to_patient text references public.patients (patient_id)
+    assigned_to_patient text references public.patients (patient_id),
+    -- A bed is occupied exactly when a patient is assigned (no "ghost" occupied beds)
+    constraint hospital_resources_occupied_has_patient
+        check ((status = 'occupied') = (assigned_to_patient is not null))
 );
 
 -- One row per processed note: the LLM's extracted diagnoses and prescriptions.
@@ -71,8 +74,10 @@ create table if not exists public.care_tasks (
     description    text not null,                         -- e.g. Prep for transthoracic echocardiogram
     category       text not null default 'other'
                    check (category in ('prep', 'monitoring', 'lab', 'imaging', 'consult', 'medication', 'other')),
+    -- 'cancelled': still open when the patient was discharged
     status         text not null default 'suggested'
-                   check (status in ('suggested', 'accepted', 'rejected', 'done')),
+                   constraint care_tasks_status_check
+                   check (status in ('suggested', 'accepted', 'rejected', 'done', 'cancelled')),
     suggested_by   text not null default 'ai' check (suggested_by in ('ai', 'clinician')),
     source_note_id uuid references public.clinical_notes (id),
     created_at     timestamptz not null default now(),

@@ -332,7 +332,8 @@ def call_mock_api(endpoint: str, data: Dict[str, Any]) -> Dict[str, Any]:
         raise Exception(f"Connection error calling {endpoint}")
 
 
-def reserve_bed(patient_id: str, ward_type: str, priority: str, clinical_reason: str) -> Dict[str, Any]:
+def reserve_bed(patient_id: str, ward_type: str, priority: str, clinical_reason: str,
+                department: Optional[str] = None) -> Dict[str, Any]:
     """
     Call mock API to reserve a hospital bed.
     
@@ -341,6 +342,7 @@ def reserve_bed(patient_id: str, ward_type: str, priority: str, clinical_reason:
         ward_type: Type of ward (ICU, general, etc.)
         priority: Priority level
         clinical_reason: Reason for bed reservation
+        department: The note's department; the API prefers beds there
         
     Returns:
         API response
@@ -349,7 +351,8 @@ def reserve_bed(patient_id: str, ward_type: str, priority: str, clinical_reason:
         "patient_id": patient_id,
         "ward_type": ward_type,
         "priority": priority,
-        "clinical_reason": clinical_reason
+        "clinical_reason": clinical_reason,
+        "department": department
     }
     return call_mock_api("/api/reserve-bed", data)
 
@@ -419,7 +422,8 @@ def execute_llm_actions(
     actions: List[Dict[str, Any]],
     patient_id: str,
     raw_text: Optional[str] = None,
-    reasoning: Optional[str] = None
+    reasoning: Optional[str] = None,
+    department: Optional[str] = None
 ) -> Dict[str, Any]:
     """
     Execute actions returned by the LLM.
@@ -450,7 +454,8 @@ def execute_llm_actions(
                     patient_id=params.get("patient_id", patient_id),
                     ward_type=params.get("ward_type"),
                     priority=params.get("priority"),
-                    clinical_reason=params.get("clinical_reason")
+                    clinical_reason=params.get("clinical_reason"),
+                    department=department
                 )
                 results["executed_actions"].append({
                     "tool": tool_name,
@@ -590,7 +595,8 @@ async def process_note(request: ProcessNoteRequest) -> ProcessNoteResponse:
             print(f"[ORCHESTRATOR] Executing {len(actions)} actions from LLM...")
             # The hospital API calls are blocking; keep them off the event loop
             execution_results = await run_in_threadpool(
-                execute_llm_actions, actions, patient_id, raw_text, llm_response.get("reasoning")
+                execute_llm_actions, actions, patient_id, raw_text, llm_response.get("reasoning"),
+                request.metadata.department
             )
             executed = execution_results["executed_actions"]
             alerts = execution_results["alerts"]

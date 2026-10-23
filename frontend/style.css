@@ -1,221 +1,196 @@
+/* Ophia design system, shared by the clinical notes page and the ward board.
+   Flat and restrained: one clinical blue-teal for interaction, standard
+   red / amber / green reserved for acuity, hairline borders, no gradients. */
+
+:root {
+  --bg: #f5f6f8;
+  --surface: #ffffff;
+  --ink: #101828;
+  --ink-2: #475467;
+  --ink-3: #8a94a6;
+  --line: #e4e7ec;
+  --line-2: #f0f2f5;
+  --field: #d0d5dd;
+
+  --primary: #0b6672;
+  --primary-ink: #08525c;
+  --primary-soft: #e8f2f3;
+
+  --crit: #d92d20;  --crit-soft: #fef3f2;
+  --ser: #dc6803;   --ser-soft: #fef6e7;
+  --sta: #2e7d4f;   --sta-soft: #edf6f0;
+  --iv: #175cd3;    --iv-soft: #f3f7fe;
+
+  --radius: 8px;
+  --radius-sm: 6px;
+}
+
 * { box-sizing: border-box; margin: 0; padding: 0; }
-body { font-family: -apple-system, sans-serif; background: #f5f5f5; color: #1a1a1a; }
-
-header {
-  background: #0d47a1; color: white;
-  padding: 20px 40px;
-}
-header h1 { font-size: 22px; font-weight: 600; }
-header p { font-size: 13px; opacity: 0.8; margin-top: 4px; }
-.page-header { display: flex; justify-content: space-between; align-items: center; gap: 16px; flex-wrap: wrap; }
-.page-header nav a { color: white; text-decoration: none; font-size: 14px; margin-left: 18px; opacity: 0.8; }
-.page-header nav a[aria-current="page"], .page-header nav a:hover { opacity: 1; text-decoration: underline; }
-
-main { max-width: 720px; margin: 32px auto; padding: 0 20px; }
-
-.upload-card, .results-card {
-  background: white; border-radius: 12px;
-  padding: 24px; margin-bottom: 20px;
-  border: 1px solid #e0e0e0;
-}
-h2 { font-size: 16px; font-weight: 600; margin-bottom: 16px; }
-
-.form-row { margin-bottom: 14px; }
-.form-row label { display: block; font-size: 12px; color: #666; margin-bottom: 5px; }
-.form-row input {
-  width: 100%; padding: 8px 12px;
-  border: 1px solid #ddd; border-radius: 8px;
-  font-size: 14px;
-}
-.drop-zone {
-  border: 2px dashed #ccc; border-radius: 10px;
-  padding: 24px; text-align: center;
-  color: #888; font-size: 13px; margin: 16px 0;
-}
-.drop-zone input[type="file"] { display: none; }
-.btn {
-  display: inline-block; padding: 8px 18px;
-  background: #e8f0fe; color: #1a56db;
-  border-radius: 8px; cursor: pointer; font-size: 13px;
-  border: 1px solid #c0d0f8; margin-top: 8px;
-}
-.file-name { font-size: 12px; color: #888; margin-top: 8px; }
-.btn-primary {
-  width: 100%; padding: 12px;
-  background: #0d47a1; color: white;
-  border: none; border-radius: 8px;
-  font-size: 15px; font-weight: 500; cursor: pointer; margin-top: 8px;
-}
-.btn-primary:disabled { opacity: 0.6; cursor: not-allowed; }
-
-.status { padding: 12px 16px; border-radius: 8px; font-size: 13px; margin-bottom: 16px; }
-.status-loading { background: #fff3cd; color: #856404; }
-.status-success { background: #d1fae5; color: #065f46; }
-.status-error   { background: #fee2e2; color: #991b1b; }
-
-.result-row {
-  display: flex; justify-content: space-between;
-  padding: 10px 0; border-bottom: 1px solid #f0f0f0;
-  font-size: 13px;
-}
-.result-label { color: #666; }
-.result-value { font-weight: 500; }
-.badge { background: #e8f0fe; color: #1a56db; padding: 2px 10px; border-radius: 99px; }
-.result-transcription { margin-top: 14px; }
-.result-transcription .result-label { display: block; margin-bottom: 6px; color: #666; font-size: 12px; }
-.result-transcription p {
-  background: #f9fafb; border-radius: 8px;
-  padding: 12px; font-size: 13px; line-height: 1.7; color: #333;
-}
-.hidden { display: none !important; }
-
-textarea {
-  width: 100%; padding: 8px 12px;
-  border: 1px solid #ddd; border-radius: 8px;
-  font-size: 14px; font-family: inherit;
-  resize: vertical; line-height: 1.6;
-}
-select {
-  width: 100%; padding: 8px 12px;
-  border: 1px solid #ddd; border-radius: 8px;
-  font-size: 14px; background: white;
-}
-.rx-table {
-  width: 100%; border-collapse: collapse;
-  font-size: 13px; margin-top: 6px;
-}
-.rx-table th, .rx-table td {
-  padding: 7px 10px; text-align: left;
-  border-bottom: 1px solid #f0f0f0;
-}
-.rx-table th { color: #666; font-weight: 500; }
-.alert-box {
-  background: #fee2e2; border-radius: 8px;
-  padding: 12px 14px; margin-bottom: 14px;
-  border: 1px solid #fca5a5;
-}
-.alert-box strong { color: #991b1b; display: block; margin-bottom: 4px; }
-.alert-box p { color: #7f1d1d; font-size: 13px; line-height: 1.5; }
-
-/* ---------------------------------------------------
-   Ophia Dashboard — Modern Enterprise UI Upgrade
---------------------------------------------------- */
-
-/* 1. Base Typography and Background */
 body {
-    font-family: 'Inter', 'Segoe UI', system-ui, sans-serif;
-    background-color: #f8fafc; /* Very soft, clean hospital gray/blue */
-    color: #0f172a;
-    line-height: 1.5;
+  font-family: "IBM Plex Sans", Arial, sans-serif;
+  font-size: 14px; line-height: 1.45;
+  color: var(--ink); background: var(--bg);
+  font-variant-numeric: tabular-nums;
+}
+:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+a { color: var(--primary); text-underline-offset: 2px; }
+a:hover { color: var(--primary-ink); }
+.hidden { display: none !important; }
+.muted { color: var(--ink-3); }
+.small { font-size: 12px; }
+svg.icon {
+  width: 18px; height: 18px; flex-shrink: 0;
+  fill: none; stroke: currentColor; stroke-width: 1.75; stroke-linecap: round; stroke-linejoin: round;
 }
 
-/* 2. The Main Results Panel */
-#results-panel {
-    background: #ffffff;
-    border-radius: 12px;
-    border: 1px solid #e2e8f0;
-    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -2px rgba(0, 0, 0, 0.05);
-    padding: 32px;
-    margin-top: 24px;
-}
+/* ---------- App shell: sidebar + main ---------- */
 
-/* 3. Section Headers */
-.section-label {
-    font-weight: 600;
-    font-size: 12px;
-    color: #64748b;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    margin-top: 24px;
-    margin-bottom: 8px;
-    border-bottom: 2px solid #f1f5f9;
-    padding-bottom: 4px;
+.app { display: flex; min-height: 100vh; }
+.sidebar {
+  width: 228px; flex-shrink: 0; position: sticky; top: 0; height: 100vh;
+  display: flex; flex-direction: column; gap: 2px;
+  padding: 20px 14px; background: var(--surface); border-right: 1px solid var(--line);
 }
-
-/* 4. The Prescriptions Table */
-.rx-table {
-    width: 100%;
-    border-collapse: collapse;
-    margin-top: 8px;
-    font-size: 14px;
+.logo { display: flex; align-items: center; gap: 9px; padding: 0 10px 20px; font-size: 18px; font-weight: 700; letter-spacing: -0.01em; }
+/* The pulse-ring mark (same drawing as logo.svg, coloured by the theme) */
+.logo svg { width: 24px; height: 24px; color: var(--primary); flex-shrink: 0; }
+.nav-section { padding: 14px 10px 6px; font-size: 11px; font-weight: 600; color: var(--ink-3); text-transform: uppercase; letter-spacing: 0.06em; }
+.sidebar nav { display: flex; flex-direction: column; gap: 2px; }
+.sidebar nav a {
+  display: flex; align-items: center; gap: 10px; padding: 8px 10px;
+  border-radius: var(--radius-sm); color: var(--ink-2); text-decoration: none; font-weight: 500;
 }
+.sidebar nav a:hover { background: var(--line-2); }
+.sidebar nav a[aria-current="page"] { background: var(--primary-soft); color: var(--primary-ink); }
+.nav-count { margin-left: auto; font-size: 12px; font-weight: 600; color: var(--primary-ink); }
+.sidebar-foot { margin-top: auto; padding: 14px 10px 0; border-top: 1px solid var(--line); }
+.sidebar-foot label { display: block; font-size: 12px; color: var(--ink-3); margin-bottom: 4px; }
+.sidebar-foot input { width: 100%; }
 
-.rx-table th {
-    text-align: left;
-    padding: 12px 16px;
-    background-color: #f8fafc;
-    color: #475569;
-    font-weight: 600;
-    border-radius: 6px 6px 0 0;
+main.content { flex: 1; min-width: 0; padding: 26px 32px 40px; }
+.page-head { display: flex; justify-content: space-between; align-items: flex-end; gap: 16px; flex-wrap: wrap; margin-bottom: 20px; }
+.page-head h1 { font-size: 22px; font-weight: 600; letter-spacing: -0.01em; }
+.page-head p { color: var(--ink-2); margin-top: 3px; }
+
+/* ---------- Panels, forms, buttons ---------- */
+
+.panel { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); }
+.panel > h2 { font-size: 14px; font-weight: 600; padding: 14px 18px; border-bottom: 1px solid var(--line); }
+.panel-body { padding: 18px; }
+
+label.field-label { display: block; font-size: 13px; font-weight: 500; color: var(--ink-2); margin-bottom: 6px; }
+input[type="text"], select, textarea {
+  width: 100%; padding: 9px 11px; font: inherit; color: var(--ink);
+  background: #fff; border: 1px solid var(--field); border-radius: var(--radius-sm);
 }
+textarea { min-height: 170px; line-height: 1.5; resize: vertical; }
+input:focus, select:focus, textarea:focus { border-color: var(--primary); outline: none; box-shadow: 0 0 0 3px var(--primary-soft); }
 
-.rx-table td {
-    padding: 12px 16px;
-    border-bottom: 1px solid #e2e8f0;
-    color: #1e293b;
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  padding: 9px 16px; font: 500 14px "IBM Plex Sans", Arial, sans-serif;
+  border-radius: var(--radius-sm); border: 1px solid var(--field); background: #fff; color: var(--ink); cursor: pointer;
 }
+.btn:hover { background: var(--line-2); }
+.btn:disabled { opacity: 0.55; cursor: not-allowed; }
+.btn-primary { background: var(--primary); border-color: var(--primary); color: #fff; font-weight: 600; }
+.btn-primary:hover { background: var(--primary-ink); }
+.btn-sm { padding: 5px 11px; font-size: 13px; }
+.btn-accept { background: var(--sta); border-color: var(--sta); color: #fff; }
+.btn-accept:hover { background: #256b42; }
+.btn-reject { color: var(--crit); }
 
-.rx-table tr:last-child td {
-    border-bottom: none;
-}
+.segmented { display: flex; border: 1px solid var(--field); border-radius: var(--radius-sm); overflow: hidden; }
+.segmented label { flex: 1; text-align: center; padding: 8px; cursor: pointer; color: var(--ink-2); border-right: 1px solid var(--field); }
+.segmented label:last-child { border-right: 0; }
+.segmented input { position: absolute; opacity: 0; pointer-events: none; }
+.segmented input:checked + span { color: var(--primary-ink); font-weight: 600; }
+.segmented label:has(input:checked) { background: var(--primary-soft); }
+.segmented label:has(input:focus-visible) { outline: 2px solid var(--primary); outline-offset: -2px; }
 
-/* 5. The Action Badges (update_record, schedule_appointment) */
-.badge {
-    display: inline-block;
-    background-color: #eff6ff;
-    color: #2563eb;
-    border: 1px solid #bfdbfe;
-    padding: 6px 12px;
-    border-radius: 9999px; /* Gives it the perfect pill shape */
-    font-size: 12px;
-    font-weight: 600;
-    margin-right: 8px;
-    text-transform: lowercase;
-    box-shadow: 0 1px 2px rgba(0,0,0,0.05);
-}
+/* ---------- Shared clinical elements ---------- */
 
-/* 6. Success & Error Banners */
-.status-success {
-    background-color: #dcfce7;
-    color: #166534;
-    border: 1px solid #bbf7d0;
-    padding: 16px;
-    border-radius: 8px;
-    font-weight: 500;
-}
+.kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 24px; }
+.kpi { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px 16px; }
+.kpi small { color: var(--ink-2); font-size: 13px; }
+.kpi strong { display: block; font-size: 26px; font-weight: 600; margin: 4px 0 2px; }
+.kpi strong span { font-size: 15px; font-weight: 400; color: var(--ink-3); }
+.kpi em { font-style: normal; font-size: 12px; color: var(--ink-3); }
+.kpi-critical strong { color: var(--crit); }
+.kpi-critical em { color: var(--ink-2); }
+.kpi-review strong { color: var(--primary); }
 
-.status-error {
-    background-color: #fee2e2;
-    color: #b91c1c;
-    border: 1px solid #fecaca;
-    padding: 16px;
-    border-radius: 8px;
-    font-weight: 500;
-}
+.acuity { font-size: 12px; font-weight: 600; padding: 2px 8px; border-radius: 4px; background: var(--line-2); color: var(--ink-2); white-space: nowrap; }
+.acuity-critical .acuity, .acuity.acuity-critical { background: var(--crit); color: #fff; }
+.acuity-serious .acuity, .acuity.acuity-serious { background: var(--ser-soft); color: var(--ser); }
+.acuity-stable .acuity, .acuity.acuity-stable { background: var(--sta-soft); color: var(--sta); }
 
-/* 7. The Main Submit Button */
-button, #submit-btn {
-    background-color: #2563eb;
-    color: #ffffff;
-    border: none;
-    padding: 12px 24px;
-    border-radius: 8px;
-    font-weight: 600;
-    font-size: 14px;
-    cursor: pointer;
-    transition: all 0.2s ease;
-    box-shadow: 0 2px 4px rgba(37, 99, 235, 0.2);
-}
+.status { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--ink-2); white-space: nowrap; }
+.status::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--ink-3); }
+.status-available::before { background: var(--sta); }
+.status-occupied::before { background: var(--primary); }
+.status-cleaning::before { background: var(--ser); }
 
-button:hover, #submit-btn:hover {
-    background-color: #1d4ed8;
-    transform: translateY(-1px);
-    box-shadow: 0 4px 6px rgba(37, 99, 235, 0.3);
-}
+.allergy { display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 500; color: var(--crit); }
+.allergy svg.icon { width: 15px; height: 15px; }
+.allergy-banner { padding: 10px 12px; border-radius: var(--radius-sm); background: var(--crit-soft); font-size: 13px; }
 
-button:disabled {
-    background-color: #94a3b8;
-    cursor: not-allowed;
-    transform: none;
-    box-shadow: none;
+.meds { display: flex; flex-wrap: wrap; gap: 6px; }
+.med { display: inline-flex; align-items: baseline; gap: 6px; padding: 3px 7px; font-size: 12px; border: 1px solid var(--line); border-radius: 4px; }
+.med b { font-weight: 600; }
+.route { font-size: 10px; font-weight: 700; color: var(--ink-3); }
+.med-iv { border-color: #b2ccf5; background: var(--iv-soft); }
+.med-iv .route { color: var(--iv); }
+
+.section-label { font-size: 11px; font-weight: 600; color: var(--ink-3); text-transform: uppercase; letter-spacing: 0.05em; margin: 12px 0 6px; }
+
+.notice { padding: 11px 14px; border-radius: var(--radius-sm); font-size: 13px; margin-bottom: 16px; border: 1px solid transparent; }
+.notice-error { background: var(--crit-soft); color: #912018; border-color: #fecdca; }
+.notice-warning { background: var(--ser-soft); color: #93370d; border-color: #fedf89; }
+.notice-success { background: var(--sta-soft); color: #1d5b38; border-color: #c6e5d1; }
+.notice-info { background: var(--primary-soft); color: var(--primary-ink); border-color: #c7dfe2; }
+.notice strong { display: block; margin-bottom: 2px; }
+
+dl.facts { display: grid; grid-template-columns: 110px 1fr; font-size: 13px; }
+dl.facts dt { color: var(--ink-3); padding: 9px 0; border-bottom: 1px solid var(--line-2); }
+dl.facts dd { padding: 9px 0; border-bottom: 1px solid var(--line-2); }
+
+/* ---------- Clinical notes page ---------- */
+
+.notes-layout { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr); gap: 20px; align-items: start; }
+.notes-side { display: flex; flex-direction: column; gap: 20px; }
+.field-row { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 14px; }
+.field { margin-bottom: 14px; }
+.hint { font-weight: 400; color: var(--ink-3); }
+.attach { display: flex; align-items: center; gap: 10px; margin-top: 12px; padding: 10px 12px; border: 1px dashed var(--field); border-radius: var(--radius-sm); color: var(--ink-2); font-size: 13px; }
+.attach input[type="file"] { display: none; }
+.attach .btn { margin-left: auto; }
+.form-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 16px; }
+.context-empty { color: var(--ink-3); font-size: 13px; }
+.context-note { color: var(--ink-3); font-size: 12px; margin-top: 12px; line-height: 1.5; }
+.result-actions { list-style: none; }
+.result-actions li { display: flex; gap: 10px; padding: 9px 0; border-bottom: 1px solid var(--line-2); font-size: 13px; }
+.result-actions li:last-child { border-bottom: 0; }
+.result-actions .tick { color: var(--sta); font-weight: 700; }
+.result-actions .cross { color: var(--crit); font-weight: 700; }
+.rx-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.rx-table th { text-align: left; font-size: 11px; font-weight: 600; color: var(--ink-3); text-transform: uppercase; letter-spacing: 0.05em; padding: 6px 8px 6px 0; border-bottom: 1px solid var(--line); }
+.rx-table td { padding: 8px 8px 8px 0; border-bottom: 1px solid var(--line-2); }
+
+/* ---------- Narrow screens: the sidebar becomes a top bar ---------- */
+
+@media (max-width: 900px) {
+  .app { flex-direction: column; }
+  .sidebar {
+    position: static; width: auto; height: auto; flex-direction: row; flex-wrap: wrap; align-items: center;
+    gap: 8px 12px; padding: 12px 14px; border-right: 0; border-bottom: 1px solid var(--line);
+  }
+  .logo { padding: 0 6px 0 0; }
+  .nav-section { display: none; }
+  .sidebar nav { flex-direction: row; }
+  .sidebar-foot { margin: 0; padding: 0; border: 0; display: flex; align-items: center; gap: 8px; width: 100%; }
+  .sidebar-foot label { margin: 0; white-space: nowrap; }
+  main.content { padding: 18px 14px 32px; }
+  .kpis { grid-template-columns: repeat(2, 1fr); }
+  .notes-layout, .field-row { grid-template-columns: 1fr; }
 }

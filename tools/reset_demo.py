@@ -24,10 +24,31 @@ from supabase import create_client
 # Demo bed state: id -> (status, assigned_to_patient). Keep in sync with db/seed.sql.
 DEMO_BEDS = {
     "RES-ICU-01": ("available", None),
+    "RES-ICU-02": ("available", None),
+    "RES-ICU-03": ("available", None),
+    "RES-ICU-04": ("available", None),
+    "RES-ICU-05": ("available", None),
+    "RES-ICU-06": ("available", None),
     "RES-NEURO-01": ("available", None),
+    "RES-NEURO-02": ("available", None),
+    "RES-NEURO-03": ("available", None),
+    "RES-NEURO-04": ("available", None),
+    "RES-NEURO-05": ("available", None),
+    "RES-NEURO-06": ("available", None),
+    "RES-CARD-01": ("available", None),
+    "RES-CARD-02": ("available", None),
+    "RES-CARD-03": ("available", None),
+    "RES-CARD-04": ("available", None),
+    "RES-CARD-05": ("available", None),
+    "RES-CARD-06": ("maintenance", None),
     "RES-EMG-01": ("available", None),
-    "RES-CARD-01": ("occupied", None),
+    "RES-EMG-02": ("available", None),
+    "RES-EMG-03": ("available", None),
+    "RES-EMG-04": ("available", None),
+    "RES-EMG-05": ("available", None),
+    "RES-EMG-06": ("cleaning", None),
     "RES-MRI-01": ("available", None),
+    "RES-CT-01": ("available", None),
 }
 
 
