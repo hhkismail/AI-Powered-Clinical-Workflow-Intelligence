@@ -3,9 +3,13 @@ from flask_cors import CORS
 from dotenv import load_dotenv
 from datetime import datetime, timezone
 import requests as req
-import base64, os, tempfile
+import base64, os, sys, tempfile
 
 load_dotenv()
+
+# Write log lines straight away, even when output is redirected to a file
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(line_buffering=True)
 
 app = Flask(__name__)
 CORS(app)  # allows your browser dashboard to call this

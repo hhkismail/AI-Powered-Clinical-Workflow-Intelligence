@@ -176,3 +176,159 @@ def test_legacy_key_name_still_works(monkeypatch):
     monkeypatch.setenv("ZAI_API_KEY", "legacy-key")
 
     assert main.get_groq_api_key() == "legacy-key"
+
+
+# ---------- Patient history: the allergy check must never be skipped silently ----------
+
+def test_note_is_halted_when_patient_history_cannot_be_checked(client, monkeypatch, mock_apis):
+    async def unavailable(patient_id):
+        raise main.PatientHistoryUnavailable("the patient database couldn't be reached (ConnectError)")
+    monkeypatch.setattr(main, "fetch_patient_history", unavailable)
+    mock_apis["llm"]["actions"] = [UPDATE]
+
+    body = client.post("/api/process-note", json=NOTE_REQUEST).json()
+
+    assert body["status"] == "halted_for_clarification"
+    assert body["system_alerts"][0]["type"] == "Patient History Unavailable"
+    assert "nothing was changed" in body["system_alerts"][0]["message"]
+    assert mock_apis["prompts"] == [] and mock_apis["calls"] == []   # the LLM was never asked
+
+
+@pytest.mark.parametrize("url, key", [("", "sb_secret_x"), ("https://x.supabase.co", ""),
+                                      ("https://x.supabase.co", "sb_publishable_x")])
+def test_history_refuses_missing_or_publishable_keys(monkeypatch, url, key):
+    monkeypatch.setenv("SUPABASE_URL", url)
+    monkeypatch.setenv("SUPABASE_SECRET_KEY", key)
+
+    with pytest.raises(main.PatientHistoryUnavailable):
+        asyncio.run(main.fetch_patient_history("PT-30554"))
+
+
+class FakeHttpResponse:
+    def __init__(self, data):
+        self.data = data
+
+    def raise_for_status(self):
+        pass
+
+    def json(self):
+        return self.data
+
+
+def fake_supabase_http(monkeypatch, tables, fail=False):
+    """Stand-in for httpx.AsyncClient that answers PostgREST reads from `tables`."""
+    seen = []
+
+    class Client:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def get(self, url, params=None, headers=None):
+            seen.append((url.rsplit("/", 1)[-1], headers.get("apikey")))
+            if fail:
+                raise main.httpx.ConnectError("connection refused")
+            return FakeHttpResponse(tables.get(url.rsplit("/", 1)[-1], []))
+
+    monkeypatch.setattr(main.httpx, "AsyncClient", Client)
+    monkeypatch.setenv("SUPABASE_URL", "https://x.supabase.co")
+    monkeypatch.setenv("SUPABASE_SECRET_KEY", "sb_secret_x")
+    return seen
+
+
+def test_history_includes_allergies_regular_meds_and_ward_orders(monkeypatch):
+    seen = fake_supabase_http(monkeypatch, {
+        "patients": [{"allergies": ["Aspirin"], "active_prescriptions": ["Atorvastatin"], "medical_history": "Post-MI"}],
+        "medication_orders": [{"drug": "Heparin", "dose": "5000 units", "route": "iv", "frequency": "continuous"}]})
+
+    history = asyncio.run(main.fetch_patient_history("PT-30554"))
+
+    assert "Known Allergies: Aspirin" in history
+    assert "Regular Medications: Atorvastatin" in history
+    assert "Current Ward Orders: Heparin 5000 units iv continuous" in history
+    assert all(key == "sb_secret_x" for _, key in seen)   # the secret key, never the publishable one
+
+
+def test_new_patient_without_a_record_is_not_an_error(monkeypatch):
+    fake_supabase_http(monkeypatch, {"patients": []})
+
+    assert asyncio.run(main.fetch_patient_history("PT-NEW")) == "PATIENT HISTORY: No prior records found."
+
+
+def test_database_outage_makes_history_unavailable(monkeypatch):
+    fake_supabase_http(monkeypatch, {}, fail=True)
+
+    with pytest.raises(main.PatientHistoryUnavailable):
+        asyncio.run(main.fetch_patient_history("PT-30554"))
+
+
+# ---------- LLM call: retry malformed JSON, short error messages ----------
+
+def fake_groq(monkeypatch, replies):
+    """Stand-in for httpx.AsyncClient.post returning (status, body) replies in order."""
+    calls = []
+
+    class Reply:
+        def __init__(self, status, body):
+            self.status_code, self.body = status, body
+            self.text = body if isinstance(body, str) else main.json.dumps(body)
+
+        def json(self):
+            return self.body if not isinstance(self.body, str) else main.json.loads(self.body)
+
+        def raise_for_status(self):
+            if self.status_code >= 400:
+                raise main.httpx.HTTPStatusError("error", request=None, response=self)
+
+    class Client:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def post(self, url, headers=None, json=None):
+            calls.append(json)
+            return Reply(*replies[len(calls) - 1])
+
+    monkeypatch.setattr(main.httpx, "AsyncClient", Client)
+    return calls
+
+
+MALFORMED = (400, {"error": {"message": "Failed to generate JSON.", "code": "json_validate_failed",
+                             "failed_generation": "{\"status\": \"success\", \"actions\": [{}}, }"}})
+GOOD = (200, {"choices": [{"message": {"content": '{"status": "success", "reasoning": "ok", "actions": []}'}}]})
+
+
+def test_malformed_json_is_retried_once(monkeypatch):
+    calls = fake_groq(monkeypatch, [MALFORMED, GOOD])
+
+    result = asyncio.run(main.call_llm("note"))
+
+    assert result["status"] == "success" and len(calls) == 2
+
+
+def test_malformed_json_twice_halts_with_a_short_message(monkeypatch):
+    fake_groq(monkeypatch, [MALFORMED, MALFORMED])
+
+    alert = asyncio.run(main.call_llm("note"))["system_alerts"][0]
+
+    assert alert["type"] == "AI Format Error"
+    assert "nothing was changed" in alert["message"] and "failed_generation" not in alert["message"]
+
+
+def test_rate_limit_gets_a_readable_message(monkeypatch):
+    fake_groq(monkeypatch, [(429, {"error": {"message": "Rate limit reached for model in organization org_123 ..."}})])
+
+    alert = asyncio.run(main.call_llm("note"))["system_alerts"][0]
+
+    assert alert["type"] == "AI Gateway Error"
+    assert "rate limit" in alert["message"] and "org_123" not in alert["message"]

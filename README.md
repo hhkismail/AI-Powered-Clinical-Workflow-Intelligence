@@ -64,16 +64,11 @@ GROQ_API_KEY=your_groq_key_here
 # Where the orchestrator sends hospital actions (the Mock EMR API)
 MOCK_API_BASE_URL=http://127.0.0.1:3001
 
-# Supabase project URL and publishable key (Project Settings -> API Keys), used by server.py
+# Supabase project URL and secret key (Project Settings -> API Keys).
+# Server-side only: every table has row-level security, so the publishable key
+# can't read or write anything and is refused.
 SUPABASE_URL=your_supabase_url
-SUPABASE_KEY=your_supabase_publishable_key
-# Secret key (sb_secret_...), server-side only. Required for the ward board tables,
-# which have row-level security that blocks the publishable key
 SUPABASE_SECRET_KEY=your_supabase_secret_key
-
-# Same Supabase project, used by the orchestrator for patient-history lookups
-ISMA_DB_URL=your_supabase_url
-ISMA_ANON_KEY=your_supabase_publishable_key
 
 # Optional: override the Groq models if Groq retires one (see https://console.groq.com/docs/deprecations)
 # GROQ_CHAT_MODEL=openai/gpt-oss-120b
@@ -166,7 +161,9 @@ python evals/run_safety_eval.py --runs 3
 * **Audit trail:** Each processed note is saved to `clinical_notes` with the original text, the extracted diagnoses and prescriptions, and the LLM's reasoning for its actions.
 * **Ward board data:** Prescriptions become `medication_orders` (routes normalised, e.g. "orally" → `oral`, "IV drip" → `iv`), the patient's acuity is updated, and next steps become `care_tasks` with status `suggested`. AI suggestions aren't real tasks until a clinician accepts them. Repeated notes don't duplicate active medications, open tasks or beds. Asking for a different kind of bed is a transfer, and the old bed is released for cleaning.
 * **Rate limits:** On Groq's free tier (8,000 tokens per minute) the orchestrator handles about five notes a minute. Beyond that, requests halt with an `AI Gateway Error` and can simply be retried.
-* **No authentication:** The APIs have no auth and accept requests from any origin. Run them locally only.
+* **Database access:** every table has row-level security with no policies, so only the server-side secret key can use the database. The publishable key sees no rows and can't write. The browser never talks to Supabase directly.
+* **No silent allergy-check bypass:** if the patient's record can't be checked (missing or wrong key, database down), the note is halted rather than processed without an allergy check. A genuinely new patient with no record is processed normally.
+* **No authentication on the APIs:** the three local services have no login and accept requests from any origin. Run them locally only.
 
 ---
 
