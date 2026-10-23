@@ -29,7 +29,7 @@ def mock_apis(monkeypatch):
         return state["llm"]
 
     async def fake_history(patient_id):
-        return "PATIENT HISTORY (CRITICAL CONTEXT):\n- Known Allergies: Aspirin"
+        return "PATIENT HISTORY (CRITICAL CONTEXT):\n- Known Allergies: Aspirin", ["Aspirin"]
 
     def fake_mock_api(endpoint, data):
         state["calls"].append(endpoint)
@@ -246,8 +246,9 @@ def test_history_includes_allergies_regular_meds_and_ward_orders(monkeypatch):
         "patients": [{"allergies": ["Aspirin"], "active_prescriptions": ["Atorvastatin"], "medical_history": "Post-MI"}],
         "medication_orders": [{"drug": "Heparin", "dose": "5000 units", "route": "iv", "frequency": "continuous"}]})
 
-    history = asyncio.run(main.fetch_patient_history("PT-30554"))
+    history, allergies = asyncio.run(main.fetch_patient_history("PT-30554"))
 
+    assert allergies == ["Aspirin"]
     assert "Known Allergies: Aspirin" in history
     assert "Regular Medications: Atorvastatin" in history
     assert "Current Ward Orders: Heparin 5000 units iv continuous" in history
@@ -257,7 +258,7 @@ def test_history_includes_allergies_regular_meds_and_ward_orders(monkeypatch):
 def test_new_patient_without_a_record_is_not_an_error(monkeypatch):
     fake_supabase_http(monkeypatch, {"patients": []})
 
-    assert asyncio.run(main.fetch_patient_history("PT-NEW")) == "PATIENT HISTORY: No prior records found."
+    assert asyncio.run(main.fetch_patient_history("PT-NEW")) == ("PATIENT HISTORY: No prior records found.", [])
 
 
 def test_database_outage_makes_history_unavailable(monkeypatch):
@@ -344,3 +345,34 @@ def test_update_record_receives_discontinuations_and_the_doctor(client, monkeypa
 
     assert sent["/api/update-record"]["discontinue"] == stop
     assert sent["/api/update-record"]["recorded_by"] == "DR-7742"
+
+
+# ---------- Deterministic allergy rules ----------
+
+def test_allergy_rules_halt_a_direct_conflict_the_llm_missed(client, mock_apis):
+    # The patient is allergic to aspirin (fake history); the LLM goes ahead anyway
+    mock_apis["llm"]["actions"] = [
+        {"tool": "update_record", "params": {"diagnoses": ["ACS"],
+         "prescriptions": [{"drug": "Aspirin", "dosage": "300mg", "route": "oral"}]}}, RESERVE]
+
+    body = client.post("/api/process-note", json=NOTE_REQUEST).json()
+
+    assert body["status"] == "halted_for_clarification"
+    assert body["system_alerts"][0]["type"] == "Allergy Conflict"
+    assert "Aspirin" in body["system_alerts"][0]["message"]
+    assert mock_apis["calls"] == []   # nothing ran, not even the bed
+
+
+def test_cross_reactivity_goes_ahead_with_a_warning(client, monkeypatch, mock_apis):
+    async def penicillin_allergy(patient_id):
+        return "PATIENT HISTORY: Known Allergies: Penicillin", ["Penicillin"]
+    monkeypatch.setattr(main, "fetch_patient_history", penicillin_allergy)
+    mock_apis["llm"]["actions"] = [{"tool": "update_record", "params": {
+        "diagnoses": ["Pneumonia"], "prescriptions": [{"drug": "Meropenem", "dosage": "1g", "route": "iv"}]}}]
+
+    body = client.post("/api/process-note", json=NOTE_REQUEST).json()
+
+    assert body["status"] == "success"
+    assert mock_apis["calls"] == ["/api/update-record"]
+    [warning] = body["system_alerts"]
+    assert warning["type"] == "Allergy Warning" and "carbapenem" in warning["message"]

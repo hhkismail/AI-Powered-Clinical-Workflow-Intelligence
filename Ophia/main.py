@@ -15,6 +15,8 @@ from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 from dotenv import load_dotenv
 import httpx
+
+from allergy_rules import check_prescriptions
 import requests
 
 # Load the shared .env from the repo root, regardless of the working directory
@@ -168,7 +170,8 @@ Your objective is to ingest clinical notes and execute hospital workflows via to
 Output MUST be pure JSON.
 
 # OPERATING RULES
-1. DRUG SAFETY: If an allergy conflict (e.g., Aspirin/NSAID) is detected, you MUST return "status": "halted_for_clarification".
+1. DRUG SAFETY: If a prescription is a drug the patient is allergic to, or in the same drug class as their allergy (e.g. Aspirin allergy and aspirin, penicillin allergy and amoxicillin), you MUST return "status": "halted_for_clarification".
+   Do NOT halt for possible cross-reactivity between different classes (e.g. a penicillin allergy and a cephalosporin or carbapenem); the system's allergy rules flag those to the clinician as warnings.
 2. ADMISSION LOGIC: If a patient is in respiratory failure or needs life support, you MUST use the 'reserve_bed' tool with ward_type='icu'.
    If the note says to admit the patient to any other ward (e.g. observation or general), you MUST use 'reserve_bed' with ward_type='observation' or 'general'.
    Rule 1 always takes priority: if any prescription conflicts with a known allergy, halt instead of admitting.
@@ -284,11 +287,12 @@ def supabase_config() -> tuple:
     return url, key
 
 
-async def fetch_patient_history(patient_id: str) -> str:
+async def fetch_patient_history(patient_id: str) -> tuple:
     """
-    Patient allergies, regular medications, active ward orders and history, for the LLM.
+    (history text for the LLM, allergy list for the allergy rules).
 
-    Returns "No prior records found" only when the patient genuinely has no record.
+    The text covers allergies, regular medications, active ward orders and history.
+    It says "No prior records found" only when the patient genuinely has no record.
     Raises PatientHistoryUnavailable when the record can't be checked, so a note is
     never processed without its allergy check.
     """
@@ -304,7 +308,7 @@ async def fetch_patient_history(patient_id: str) -> str:
             response.raise_for_status()
             rows = response.json()
             if not rows:
-                return "PATIENT HISTORY: No prior records found."
+                return "PATIENT HISTORY: No prior records found.", []
 
             orders = await client.get(f"{url}/rest/v1/medication_orders",
                                       params={"patient_id": f"eq.{patient_id}", "status": "eq.active",
@@ -323,7 +327,7 @@ async def fetch_patient_history(patient_id: str) -> str:
 - Known Allergies: {", ".join(allergies) if allergies else "None documented"}
 - Regular Medications: {", ".join(prescriptions) if prescriptions else "None"}
 - Current Ward Orders: {"; ".join(ward_orders) if ward_orders else "None"}
-- Medical History: {record.get("medical_history") or "None"}"""
+- Medical History: {record.get("medical_history") or "None"}""", allergies
 
 
 # ========================
@@ -605,7 +609,7 @@ async def process_note(request: ProcessNoteRequest) -> ProcessNoteResponse:
         # 1. Fetch the patient history from the patients table. Without it the
         # allergy check can't happen, so the note is halted rather than processed blind.
         try:
-            patient_history = await fetch_patient_history(patient_id)
+            patient_history, allergies = await fetch_patient_history(patient_id)
         except PatientHistoryUnavailable as e:
             print(f"[ORCHESTRATOR] Halting: patient history unavailable ({e})")
             return ProcessNoteResponse(
@@ -651,8 +655,24 @@ async def process_note(request: ProcessNoteRequest) -> ProcessNoteResponse:
                 ]
             )
         
-        # Step 3: Execute any actions from LLM
+        # Step 3: Deterministic allergy check on the planned prescriptions, before
+        # anything runs, so a blocked drug can't be half-executed alongside a bed
         actions = llm_response.get("actions", [])
+        planned = [rx for a in actions if a.get("tool") == "update_record"
+                   for rx in (a.get("params") or {}).get("prescriptions") or []]
+        findings = check_prescriptions(planned, allergies)
+        blocks = [f for f in findings if f["severity"] == "block"]
+        warnings = [SystemAlert(type="Allergy Warning", message=f["reason"]) for f in findings if f["severity"] == "warn"]
+        if blocks:
+            print(f"[ORCHESTRATOR] Halting: allergy rules blocked {[f['drug'] for f in blocks]}")
+            return ProcessNoteResponse(
+                status="halted_for_clarification",
+                system_alerts=[SystemAlert(type="Allergy Conflict",
+                                           message=f["reason"] + " The note wasn't processed and nothing was changed.")
+                               for f in blocks]
+            )
+
+        # Step 4: Execute any actions from LLM
         if actions:
             print(f"[ORCHESTRATOR] Executing {len(actions)} actions from LLM...")
             # The hospital API calls are blocking; keep them off the event loop
@@ -673,7 +693,8 @@ async def process_note(request: ProcessNoteRequest) -> ProcessNoteResponse:
 
             return ProcessNoteResponse(
                 status=status,
-                system_alerts=[SystemAlert(**alert) for alert in alerts] or None,
+                # Allergy warnings don't stop the note, but the clinician must see them
+                system_alerts=[SystemAlert(**alert) for alert in alerts] + warnings or None,
                 result={
                     "llm_reasoning": llm_response.get("reasoning"),
                     "execution_results": execution_results

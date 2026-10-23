@@ -137,3 +137,28 @@ def test_result_lists_stopped_and_proposed_medications(js):
     assert "Stopped as the note says: Metoprolol" in text
     assert "1 medication stop proposed for a clinician to confirm" in text
     assert "Not on the ward orders, so not stopped: Warfarin" in text
+
+
+def test_allergy_warning_is_shown_but_not_as_a_failure(js):
+    warned = json.loads(json.dumps(SUCCESS))
+    warned["system_alerts"] = [{"type": "Allergy Warning", "message": "Meropenem 1g is a carbapenem; cross-reactivity..."}]
+
+    html = js("renderResult", warned)
+
+    assert "Note processed" in html
+    assert '<div class="notice notice-warning"><strong>Allergy warning</strong><div>Meropenem 1g is a carbapenem' in html
+    assert 'class="cross"' not in html
+
+
+def test_allergy_conflict_halt_is_explained(js):
+    html = js("renderResult", {"status": "halted_for_clarification", "system_alerts": [
+        {"type": "Allergy Conflict", "message": "Aspirin conflicts with the documented Aspirin allergy. The note wasn't processed and nothing was changed."}]})
+
+    assert "Halted for review" in html and "Allergy Conflict: Aspirin conflicts" in html
+
+
+def test_context_marks_ward_orders_with_allergy_warnings(js):
+    patient = {**PATIENT, "medication_orders": [{"drug": "Meropenem", "dose": "1g", "route": "iv",
+                                                  "allergy_warning": "Meropenem is a carbapenem; cross-reactivity possible"}]}
+
+    assert 'class="allergy-inline" title="Meropenem is a carbapenem; cross-reactivity possible"' in js("renderContext", patient)

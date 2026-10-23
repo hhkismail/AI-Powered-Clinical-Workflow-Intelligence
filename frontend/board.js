@@ -34,7 +34,11 @@ const allergyLine = p => (p.allergies || []).length
 
 function medicationChip(m) {
   const route = ROUTE_LABELS[m.route];
-  return `<span class="med ${m.route === "iv" ? "med-iv" : ""}">${route ? `<span class="route">${escapeHtml(route)}</span>` : ""}` +
+  // A drug given despite possible allergy cross-reactivity stays flagged
+  const warn = m.allergy_warning
+    ? ` med-warn" title="${escapeHtml(m.allergy_warning)}` : "";
+  return `<span class="med ${m.route === "iv" ? "med-iv" : ""}${warn}">${m.allergy_warning ? ALERT_ICON : ""}` +
+         `${route ? `<span class="route">${escapeHtml(route)}</span>` : ""}` +
          `<b>${escapeHtml(m.drug)}</b>${escapeHtml(m.dose || "")}</span>`;
 }
 
@@ -182,7 +186,8 @@ function renderPatientDetails(p, now, confirmStopId) {
          <button class="btn btn-sm" data-action="stop-med-cancel">Cancel</button></div>`
     : `<button class="btn-link" data-action="stop-med-start" data-med="${escapeHtml(m.id)}">Stop</button>`;
   const medLine = m => `<li><span class="route ${m.route === "iv" ? "route-iv" : ""}">${escapeHtml(ROUTE_LABELS[m.route] || "")}</span>
-    <div><b>${escapeHtml(m.drug)}</b> ${escapeHtml(m.dose || "")}${m.frequency ? `<small>${escapeHtml(m.frequency)}</small>` : ""}</div>
+    <div><b>${escapeHtml(m.drug)}</b> ${escapeHtml(m.dose || "")}${m.frequency ? `<small>${escapeHtml(m.frequency)}</small>` : ""}
+      ${m.allergy_warning ? `<div class="med-warning-text">${ALERT_ICON}${escapeHtml(m.allergy_warning)}</div>` : ""}</div>
     ${m.id ? stopControl(m) : ""}</li>`;
   return `
       <div class="acuity-line acuity-${escapeHtml(p.acuity || "unknown")}">

@@ -11,10 +11,10 @@ def client(fake_db, monkeypatch):
     fake_db.tables["medication_orders"] = [
         {"id": "m-doxy", "patient_id": "PT-30554", "drug": "Doxycycline", "dose": "100mg", "route": "oral",
          "frequency": "daily", "status": "active", "source_note_id": None, "started_at": "2026-10-22T08:00:00Z",
-         "ended_at": None, "stopped_by": None, "stop_reason": None},
+         "ended_at": None, "stopped_by": None, "stop_reason": None, "allergy_warning": None},
         {"id": "m-meto", "patient_id": "PT-30554", "drug": "Metoprolol", "dose": "25mg", "route": "oral",
          "frequency": "twice daily", "status": "active", "source_note_id": None, "started_at": "2026-10-22T08:00:00Z",
-         "ended_at": None, "stopped_by": None, "stop_reason": None},
+         "ended_at": None, "stopped_by": None, "stop_reason": None, "allergy_warning": None},
     ]
     fake_db.tables["care_tasks"] = []
     return server.app.test_client()

@@ -9,6 +9,8 @@ from flask_cors import CORS
 from dotenv import load_dotenv
 from supabase import create_client
 
+from Ophia.allergy_rules import check_prescription, check_prescriptions
+
 # Write log lines straight away, even when output is redirected to a file
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(line_buffering=True)
@@ -111,7 +113,7 @@ def cancel_stop_proposals(order_id, by):
         }).eq('medication_order_id', order_id).eq('proposed_action', 'stop_medication').eq('status', status).execute()
 
 
-def medication_order_rows(patient_id, prescriptions, note_id):
+def medication_order_rows(patient_id, prescriptions, note_id, allergies=None):
     rows = []
     for rx in prescriptions or []:
         rx = rx if isinstance(rx, dict) else {'drug': str(rx)}
@@ -129,7 +131,10 @@ def medication_order_rows(patient_id, prescriptions, note_id):
             'route': normalize_route(rx.get('route')),
             'frequency': rx.get('frequency'),
             'status': 'active',
-            'source_note_id': note_id
+            'source_note_id': note_id,
+            # Possible cross-reactivity stays visible on the order until it's stopped
+            'allergy_warning': ' '.join(f['reason'] for f in check_prescription(drug, allergies)
+                                        if f['severity'] == 'warn') or None
         })
     return rows
 
@@ -510,6 +515,23 @@ def update_record():
     }
     record_id = str(uuid.uuid4())
 
+    # Backstop for the orchestrator's allergy check: this API refuses a drug the
+    # allergy rules block, before anything is written, whoever calls it
+    try:
+        patient_rows = supabase.table('patients').select('allergies') \
+            .eq('patient_id', patient_id).execute().data or []
+    except Exception as e:
+        print(f"[update-record] Supabase error reading allergies: {e}")
+        return supabase_query_failed_response("Unable to check the patient's allergies.")
+    allergies = (patient_rows[0].get('allergies') if patient_rows else None) or []
+    blocked = [f for f in check_prescriptions(data.get('prescriptions'), allergies) if f['severity'] == 'block']
+    if blocked:
+        return jsonify({
+            "status": "error",
+            "error_code": "ALLERGY_CONFLICT",
+            "message": " ".join(f['reason'] for f in blocked) + " Nothing was recorded."
+        }), 400
+
     try:
         supabase.table('clinical_notes').insert({
             'id': record_id,
@@ -524,7 +546,7 @@ def update_record():
 
     # Ward board data. The note is already saved, so a failure here is
     # reported as partial rather than silently dropped.
-    medications = medication_order_rows(patient_id, data.get('prescriptions'), record_id)
+    medications = medication_order_rows(patient_id, data.get('prescriptions'), record_id, allergies)
     tasks = care_task_rows(patient_id, data.get('next_steps'), record_id)
     try:
         # A follow-up note often repeats current prescriptions and plans;
@@ -633,7 +655,7 @@ def get_patient(patient_id):
         # Current ward state, so the notes page can show context before a note is written
         beds = supabase.table('hospital_resources').select('id, resource_name, wing') \
             .eq('assigned_to_patient', patient_id).eq('status', 'occupied').execute().data or []
-        medications = supabase.table('medication_orders').select('drug, dose, route, frequency') \
+        medications = supabase.table('medication_orders').select('id, drug, dose, route, frequency, allergy_warning') \
             .eq('patient_id', patient_id).eq('status', 'active').execute().data or []
         bed_request = waiting_request(patient_id)
 
@@ -718,7 +740,7 @@ def get_ward_board():
                     .in_('patient_id', patient_ids).execute().data or []:
                 patients[p['patient_id']] = p
             for m in supabase.table('medication_orders') \
-                    .select('id, patient_id, drug, dose, route, frequency, started_at') \
+                    .select('id, patient_id, drug, dose, route, frequency, started_at, allergy_warning') \
                     .in_('patient_id', patient_ids).eq('status', 'active').execute().data or []:
                 medications.setdefault(m['patient_id'], []).append(m)
             for t in supabase.table('care_tasks') \
