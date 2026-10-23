@@ -81,6 +81,22 @@ def test_observation_request_falls_back_to_any_general_bed(client, fake_db):
     assert resp["reservation_id"] == "RES-EMG-01"
 
 
+def test_general_request_prefers_a_bed_in_the_notes_department(client, fake_db):
+    # RES-CARD-02 sorts first by ID, but an Emergency note should go to triage
+    fake_db.tables["hospital_resources"] += [
+        {"id": "RES-CARD-02", "department": "Cardiology", "resource_name": "Cardiac Monitor Bay 02", "resource_type": "GEN_WARD",
+         "wing": "Wing A", "status": "available", "assigned_to_patient": None},
+        {"id": "RES-EMG-02", "department": "Emergency", "resource_name": "Triage Bay 01", "resource_type": "GEN_WARD",
+         "wing": "Triage Wing", "status": "available", "assigned_to_patient": None}]
+    bed(fake_db, "RES-NEURO-01")["status"] = "maintenance"
+
+    emergency = client.post("/api/reserve-bed", json={"patient_id": "PT-20221", "ward_type": "general", "department": "Emergency"})
+    no_department = client.post("/api/reserve-bed", json={"patient_id": "PT-40992", "ward_type": "general"})
+
+    assert emergency.get_json()["reservation_id"] == "RES-EMG-02"
+    assert no_department.get_json()["reservation_id"] == "RES-CARD-02"   # falls back to ID order
+
+
 @pytest.mark.parametrize("ward_type", ["cardiology", "diagnostic", ""])
 def test_reserve_bed_rejects_unknown_ward_type(client, ward_type):
     resp = client.post("/api/reserve-bed", json={"patient_id": "PT-30554", "ward_type": ward_type})

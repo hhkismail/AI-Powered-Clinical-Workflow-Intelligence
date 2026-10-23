@@ -137,3 +137,21 @@ def test_relative_time(js, seconds, expected):
     now = 1_800_000_000_000
     iso = js("(ms) => new Date(ms).toISOString()", now - seconds * 1000)
     assert js("relativeTime", iso, now) == expected
+
+
+def test_board_shows_patients_as_cards_and_other_beds_as_tiles(js):
+    html = js("renderBoard", board_with(RAJESH_BED, CLEANING_BED))
+
+    assert html.count('class="bed-card') == 1
+    assert 'class="bed-tile tile-cleaning"' in html
+    assert 'data-action="mark-clean" data-bed="RES-CARD-01"' in html
+
+
+def test_panel_offers_discharge_then_asks_for_confirmation(js):
+    first = js("renderPanel", RAJESH_BED, 0, False)
+    assert 'data-action="discharge-start"' in first and 'data-action="discharge-confirm"' not in first
+
+    confirm = js("renderPanel", RAJESH_BED, 0, True)
+    assert 'data-action="discharge-confirm" data-bed="RES-NEURO-01"' in confirm
+    assert "Discharge Rajesh Kumar?" in confirm
+    assert "2 active medications will be marked completed" in confirm and "2 open tasks cancelled" in confirm

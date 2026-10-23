@@ -62,3 +62,28 @@
 @media (max-width: 900px) {
   .drawer { width: 100%; }
 }
+
+/* Beds without a patient: compact tiles */
+.bed-tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(132px, 1fr)); gap: 8px; margin-top: 12px; }
+.bed-list + .bed-tiles { margin-top: 12px; }
+.wing h2 + .bed-tiles { margin-top: 0; }
+.bed-tile {
+  display: flex; flex-direction: column; gap: 3px; padding: 9px 11px;
+  background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-sm); font-size: 12px;
+}
+.tile-name { font-weight: 600; font-size: 13px; color: var(--ink); }
+.tile-maintenance { background: var(--line-2); }
+.tile-maintenance .tile-name { color: var(--ink-3); }
+.tile-cleaning { border-color: #fedf89; background: #fffcf5; }
+.tile-action {
+  align-self: flex-start; margin-top: 4px; padding: 0; border: 0; background: none;
+  font: 600 12px "IBM Plex Sans", Arial, sans-serif; color: var(--primary); cursor: pointer;
+}
+.tile-action:hover { color: var(--primary-ink); text-decoration: underline; }
+
+/* Discharge */
+.discharge { margin-top: 22px; padding-top: 16px; border-top: 1px solid var(--line); }
+.discharge-confirm { padding: 14px; border: 1px solid #fecdca; border-radius: var(--radius-sm); background: var(--crit-soft); }
+.discharge-confirm p + p { margin-top: 4px; }
+.btn-danger { background: var(--crit); border-color: var(--crit); color: #fff; font-weight: 600; }
+.btn-danger:hover { background: #b42318; }

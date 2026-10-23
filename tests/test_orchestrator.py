@@ -144,6 +144,16 @@ def test_update_record_receives_ward_board_fields_and_audit_trail(client, monkey
     assert data["reasoning"] == "AF needs monitored admission"
 
 
+def test_reserve_bed_receives_the_notes_department(client, monkeypatch, mock_apis):
+    sent = {}
+    monkeypatch.setattr(main, "call_mock_api", lambda endpoint, data: sent.update({endpoint: data}) or {"status": "success"})
+    mock_apis["llm"]["actions"] = [RESERVE]
+
+    client.post("/api/process-note", json=NOTE_REQUEST)
+
+    assert sent["/api/reserve-bed"]["department"] == "Cardiology"
+
+
 def test_missing_patient_id_is_rejected_by_validation(client, mock_apis):
     bad = {**NOTE_REQUEST, "metadata": {k: v for k, v in NOTE_REQUEST["metadata"].items() if k != "patient_id"}}
 

@@ -39,7 +39,7 @@ The following documents are located in the root directory for review:
 * A Supabase project (the free tier is fine)
 
 ### 1. Set up the database
-In your Supabase project's SQL editor, run [`db/schema.sql`](./db/schema.sql) to create the tables, then [`db/seed.sql`](./db/seed.sql) for the demo patients and beds (all fictional).
+In your Supabase project's SQL editor, run [`db/schema.sql`](./db/schema.sql) to create the tables, then [`db/seed.sql`](./db/seed.sql) for the demo patients and a 24-bed ward (all fictional).
 
 If your database was created from an older version of `schema.sql`, apply the files in [`db/migrations/`](./db/migrations/) in order instead. Each one has a matching `.down.sql` rollback.
 
@@ -107,11 +107,13 @@ Interactive API docs for the orchestrator are at http://localhost:8000/docs.
 ## 🛏️ Ward Board
 ![Ward board with an open patient panel](./docs/ward-board.png)
 
-`board.html` shows every bed, grouped by wing, and refreshes every 5 seconds. Everything on it comes from processed notes; nothing is hardcoded.
+`board.html` shows all 24 beds across four wards, plus the scanners, and refreshes every 5 seconds. Everything on it comes from processed notes; nothing is hardcoded.
 * **Bed cards:** status (available / occupied / being cleaned / maintenance), patient, **acuity** (critical / serious / stable, also shown by the card's colour), allergy warnings, active medications with **IV lines first**, accepted next steps, and how many AI suggestions are waiting.
 * **Patient panel:** click a card (or link to `board.html#bed=RES-ICU-01`) for history, all active medications and open tasks.
 * **Human in the loop:** AI-suggested next steps must be **accepted or rejected by a clinician** (enter your clinician ID in the sidebar; it's shared with the notes page). Accepted tasks can be marked done. Each decision records who made it and when, and two clinicians can't both decide the same suggestion.
-* **Bed turnover:** when a patient is transferred, the old bed goes to *being cleaned*; **Mark clean** makes it available again.
+* **Discharge:** *Discharge patient* in the drawer (with a confirm step) frees the bed for cleaning, marks the patient's ward medications completed and cancels open tasks. Nothing is deleted, and the clinician ID is recorded.
+* **Bed turnover:** after a discharge or transfer the bed goes to *being cleaned*; **Mark clean** makes it available again. Free beds show as compact tiles so a full ward stays scannable.
+* **Bed allocation:** admissions get a bed in an observation area when the note asks for observation, otherwise in the note's own department (Emergency → triage, Cardiology → cardiac bays). The database rejects an "occupied" bed with no patient in it.
 * **Security:** the board talks only to the Mock EMR API (`GET /api/ward-board`, `POST /api/tasks/<id>/decision`, `POST /api/beds/<id>/mark-clean`). The browser never gets a Supabase key.
 
 ---

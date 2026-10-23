@@ -58,6 +58,10 @@ class FakeQuery:
         self.row_limit = n
         return self
 
+    def order(self, column, desc=False):
+        self.order_by = (column, desc)
+        return self
+
     def execute(self):
         if self.db.fail or self.table in self.db.fail_tables:
             raise RuntimeError("simulated database outage")
@@ -78,7 +82,11 @@ class FakeQuery:
                 row.update(self.values)
             result.data = [dict(r) for r in matches]
         else:
-            rows_out = [dict(r) for r in matches][: self.row_limit]
+            ordered = matches
+            if getattr(self, "order_by", None):
+                column, desc = self.order_by
+                ordered = sorted(matches, key=lambda r: str(r.get(column) or ""), reverse=desc)
+            rows_out = [dict(r) for r in ordered][: self.row_limit]
             if self.columns:
                 known = set().union(*(r.keys() for r in rows)) if rows else set(self.columns)
                 missing = [c for c in self.columns if c not in known]

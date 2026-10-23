@@ -103,13 +103,28 @@ function renderBedCard(bed, openBedId) {
     </article>`;
 }
 
+// Beds without a patient are compact tiles, so a wing of many beds stays scannable
+function renderBedTile(bed) {
+  const action = bed.status === "cleaning"
+    ? `<button class="tile-action" data-action="mark-clean" data-bed="${escapeHtml(bed.id)}">Mark clean</button>` : "";
+  return `
+    <div class="bed-tile tile-${escapeHtml(bed.status)}" title="${escapeHtml(bed.id)}">
+      <span class="tile-name">${escapeHtml(bed.name)}</span>
+      <span class="status status-${escapeHtml(bed.status)}">${escapeHtml(STATUS_LABELS[bed.status] || bed.status)}</span>
+      ${action}
+    </div>`;
+}
+
 function renderBoard(board, openBedId) {
   return (board.wards || []).map(ward => {
+    const occupied = ward.beds.filter(b => b.patient);
+    const others = ward.beds.filter(b => !b.patient);
     const free = ward.beds.filter(b => b.status === "available").length;
     return `
     <section class="wing">
       <h2>${escapeHtml(ward.wing)} <span>${free} of ${ward.beds.length} free</span></h2>
-      <div class="bed-list">${ward.beds.map(b => renderBedCard(b, openBedId)).join("")}</div>
+      ${occupied.length ? `<div class="bed-list">${occupied.map(b => renderBedCard(b, openBedId)).join("")}</div>` : ""}
+      ${others.length ? `<div class="bed-tiles">${others.map(renderBedTile).join("")}</div>` : ""}
     </section>`;
   }).join("");
 }
@@ -130,7 +145,26 @@ function renderTask(t) {
     </li>`;
 }
 
-function renderPanel(bed, now) {
+function renderDischarge(bed, confirming) {
+  const p = bed.patient;
+  if (!confirming) {
+    return `<div class="discharge"><button class="btn" data-action="discharge-start">Discharge patient…</button></div>`;
+  }
+  const meds = (p.medications || []).length;
+  const open = (p.tasks || []).length;
+  return `
+    <div class="discharge discharge-confirm" role="group" aria-label="Confirm discharge">
+      <p><strong>Discharge ${escapeHtml(p.name)}?</strong></p>
+      <p class="muted small">${escapeHtml(bed.name)} goes to cleaning. ${plural(meds, "active medication")} will be marked completed
+        and ${plural(open, "open task")} cancelled. Nothing is deleted.</p>
+      <div class="task-buttons">
+        <button class="btn btn-sm btn-danger" data-action="discharge-confirm" data-bed="${escapeHtml(bed.id)}">Discharge</button>
+        <button class="btn btn-sm" data-action="discharge-cancel">Cancel</button>
+      </div>
+    </div>`;
+}
+
+function renderPanel(bed, now, confirmingDischarge) {
   const p = bed.patient;
   const meds = p.medications || [];
   const tasks = p.tasks || [];
@@ -154,6 +188,7 @@ function renderPanel(bed, now) {
       <div class="section-label">Next steps</div>
       <p class="muted small">AI suggestions only become tasks once a clinician accepts them.</p>
       ${tasks.length ? `<ul class="task-list">${tasks.map(renderTask).join("")}</ul>` : `<p class="muted">No open tasks</p>`}
+      ${renderDischarge(bed, confirmingDischarge)}
     </div>`;
 }
 
@@ -169,7 +204,7 @@ function findBed(board, bedId) {
 if (typeof document !== "undefined") {
   // board.html#bed=RES-ICU-01 opens that bed's panel, so a patient can be linked to
   const bedFromHash = () => decodeURIComponent((location.hash.match(/^#bed=(.+)$/) || [])[1] || "") || null;
-  const state = { board: null, openBed: bedFromHash(), loadedAt: null };
+  const state = { board: null, openBed: bedFromHash(), loadedAt: null, confirmDischarge: false };
   const $ = id => document.getElementById(id);
 
   // Shared with the notes page, so a clinician only enters their ID once
@@ -192,7 +227,7 @@ if (typeof document !== "undefined") {
     $("nav-review-count").textContent = state.board.summary?.pending_suggestions || "";
     const bed = state.openBed && findBed(state.board, state.openBed);
     if (bed && bed.patient) {
-      $("panel-content").innerHTML = renderPanel(bed);
+      $("panel-content").innerHTML = renderPanel(bed, undefined, state.confirmDischarge);
       $("panel").classList.remove("hidden");
     } else {
       // The patient may have moved or been discharged since the link was made
@@ -202,6 +237,7 @@ if (typeof document !== "undefined") {
 
   function setOpenBed(bedId) {
     state.openBed = bedId;
+    state.confirmDischarge = false;
     history.replaceState(null, "", bedId ? `#bed=${encodeURIComponent(bedId)}` : location.pathname);
     render();
     if (bedId) $("panel").querySelector(".btn-close")?.focus();
@@ -250,6 +286,20 @@ if (typeof document !== "undefined") {
         target.disabled = true;
         await post(`/api/tasks/${encodeURIComponent(target.dataset.task)}/decision`,
                    { decision: target.dataset.decision, clinician_id: clinician });
+        await load();
+      } else if (action === "discharge-start" || action === "discharge-cancel") {
+        state.confirmDischarge = action === "discharge-start";
+        render();
+      } else if (action === "discharge-confirm") {
+        const clinician = clinicianInput.value.trim();
+        if (!clinician) {
+          showError("Enter your clinician ID in the sidebar before discharging a patient.");
+          clinicianInput.focus();
+          return;
+        }
+        target.disabled = true;
+        await post(`/api/beds/${encodeURIComponent(target.dataset.bed)}/discharge`, { clinician_id: clinician });
+        setOpenBed(null);   // the patient has left the bed
         await load();
       } else if (action === "mark-clean") {
         target.disabled = true;
