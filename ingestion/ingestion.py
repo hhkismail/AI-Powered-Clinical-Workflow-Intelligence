@@ -97,9 +97,10 @@ def process_note():
     if not patient_id or not doctor_id:
         return jsonify({"error": "patient_id and doctor_id are required"}), 400
 
-    # 2. Extract raw text
-    input_method = "text"
-    raw_text = typed_text
+    # 2. Extract raw text. Typed text and an uploaded file are combined, so
+    # context typed alongside a photo or voice memo isn't lost.
+    input_methods = ["text"] if typed_text else []
+    extracted = ""
 
     if "file" in request.files :
         uploaded = request.files["file"]
@@ -115,19 +116,20 @@ def process_note():
 
         try:
             if fname.endswith((".jpg", ".jpeg", ".png")):
-                raw_text = ocr_image(tmp_path)
-                input_method = "image"
+                extracted = ocr_image(tmp_path)
+                input_methods.append("image")
 
             elif fname.endswith((".mp3", ".wav", ".m4a")):
-                raw_text = transcribe_audio(tmp_path)
-                input_method = "audio"
+                extracted = transcribe_audio(tmp_path)
+                input_methods.append("audio")
         except req.exceptions.RequestException as e:
             return jsonify({"error": f"Groq OCR/transcription request failed: {e}"}), 502
         finally:
             os.unlink(tmp_path)
     
+    raw_text = "\n\n".join(part for part in (typed_text, (extracted or "").strip()) if part)
     if not raw_text:
-        return jsonify({"error": "Please provide text or upload a valid file"}), 400  
+        return jsonify({"error": "Please provide text or upload a valid file"}), 400
 
     # 3. Build the payload the orchestrator expects (ProcessNoteRequest in Ophia/main.py)
     payload = {
@@ -139,7 +141,7 @@ def process_note():
             "priority":   priority
         },
         "payload": {
-            "input_methods_used": [input_method],
+            "input_methods_used": input_methods,
             "raw_text": raw_text
         }
     }

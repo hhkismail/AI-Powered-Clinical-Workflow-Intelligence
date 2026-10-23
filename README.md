@@ -100,6 +100,7 @@ Interactive API docs for the orchestrator are at http://localhost:8000/docs.
 
 `index.html` is where a clinician records a note: typed, or as a photo or voice memo.
 * **Patient context:** as you type a patient ID, their allergies, acuity, current bed, ward medication orders and history load alongside the form, so an allergy is visible *before* you prescribe.
+* **Photos and voice memos:** attach a photo of a handwritten note (read with a vision model) or a voice memo (transcribed with Whisper). Anything typed alongside is kept and combined with it. Try [`docs/samples/handwritten_note.jpg`](./docs/samples/handwritten_note.jpg) for `PT-40992`, or [`docs/samples/voice_memo.wav`](./docs/samples/voice_memo.wav) for `PT-10934`. The memo prescribes amoxicillin to a patient with a penicillin allergy, so it's halted for review.
 * **Clear results:** after processing you see exactly what happened: the record updated, the bed reserved (or why not), the follow-ups booked, how many next steps went to the ward board, the extracted prescriptions, and the AI's reasoning. Partial failures and safety halts are spelled out rather than hidden.
 
 ---
