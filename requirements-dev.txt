@@ -1,2 +1,4 @@
 -r requirements.txt
 pytest==9.1.1
+# Runs frontend/board.js rendering tests without a browser or Node
+quickjs==1.19.4

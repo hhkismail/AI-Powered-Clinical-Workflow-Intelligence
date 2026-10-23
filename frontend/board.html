@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Ophia Ward Board</title>
+  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="board.css">
+</head>
+<body>
+  <header class="board-header">
+    <div>
+      <h1>Ward Board</h1>
+      <p>Live bed status, acuity, medications and next steps from processed clinical notes</p>
+    </div>
+    <nav>
+      <a href="index.html">Clinical notes</a>
+      <a href="board.html" aria-current="page">Ward board</a>
+    </nav>
+  </header>
+
+  <div class="toolbar">
+    <div id="summary" class="summary"></div>
+    <div class="toolbar-right">
+      <label for="clinician-id">Clinician ID</label>
+      <input id="clinician-id" type="text" placeholder="e.g. DR-7742" autocomplete="off">
+      <span id="updated" class="muted small" aria-live="polite"></span>
+    </div>
+  </div>
+
+  <div id="board-error" class="board-error hidden" role="alert"></div>
+
+  <div class="board-layout">
+    <main id="board" class="board-main"><p class="muted">Loading ward board…</p></main>
+    <aside id="panel" class="panel hidden" aria-label="Patient details">
+      <div id="panel-content"></div>
+    </aside>
+  </div>
+
+  <script src="board.js"></script>
+</body>
+</html>

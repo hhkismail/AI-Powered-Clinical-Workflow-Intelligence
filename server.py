@@ -168,15 +168,18 @@ def reserve_bed():
                 "message": "The patient already has a bed of this type; no new bed was reserved."
             }), 200
 
-        bed_result = (
+        available_beds = (
             supabase.table('hospital_resources')
             .select('id, resource_name, wing, resource_type, status')
             .eq('resource_type', mapped_resource_type)
             .eq('status', 'available')
-            .limit(1)
             .execute()
-        )
-        available_beds = bed_result.data or []
+        ).data or []
+        # Observation and general beds share GEN_WARD; when the note asks for
+        # observation, prefer a bed in an observation area before any other
+        if resource_type == 'observation':
+            available_beds.sort(key=lambda b: 'observation' not in
+                                f"{b.get('wing') or ''} {b.get('resource_name') or ''}".lower())
 
         if not available_beds:
             return jsonify({
@@ -439,6 +442,149 @@ def get_ward_availability():
         }), 200
     except Exception:
         return supabase_query_failed_response("Unable to fetch ward availability from the database.")
+
+# 6. Ward Board (Read): every bed with its patient, active medications and open tasks
+@app.route('/api/ward-board', methods=['GET'])
+def get_ward_board():
+    if supabase is None:
+        return supabase_unavailable_response()
+
+    try:
+        resources = supabase.table('hospital_resources') \
+            .select('id, resource_name, resource_type, department, wing, status, assigned_to_patient') \
+            .execute().data or []
+        patient_ids = sorted({r['assigned_to_patient'] for r in resources if r.get('assigned_to_patient')})
+
+        # One query per table for the whole board, not one per bed
+        patients, medications, tasks = {}, {}, {}
+        if patient_ids:
+            for p in supabase.table('patients') \
+                    .select('patient_id, name, age, allergies, medical_history, acuity, acuity_updated_at') \
+                    .in_('patient_id', patient_ids).execute().data or []:
+                patients[p['patient_id']] = p
+            for m in supabase.table('medication_orders') \
+                    .select('id, patient_id, drug, dose, route, frequency, started_at') \
+                    .in_('patient_id', patient_ids).eq('status', 'active').execute().data or []:
+                medications.setdefault(m['patient_id'], []).append(m)
+            for t in supabase.table('care_tasks') \
+                    .select('id, patient_id, description, category, status, suggested_by, created_at, decided_at, decided_by') \
+                    .in_('patient_id', patient_ids).in_('status', ['suggested', 'accepted']).execute().data or []:
+                tasks.setdefault(t['patient_id'], []).append(t)
+    except Exception as e:
+        print(f"[ward-board] Supabase error: {e}")
+        return supabase_query_failed_response("Unable to load the ward board from the database.")
+
+    wings = {}
+    for r in sorted(resources, key=lambda r: r['id']):
+        patient = None
+        pid = r.get('assigned_to_patient')
+        if pid and pid in patients:
+            patient = dict(patients[pid])
+            # IV lines first: they're what nurses check most often
+            patient['medications'] = sorted(medications.get(pid, []),
+                                            key=lambda m: (m.get('route') != 'iv', m.get('started_at') or ''))
+            # Suggestions waiting for a decision first, then accepted work
+            patient['tasks'] = sorted(tasks.get(pid, []),
+                                      key=lambda t: (t['status'] != 'suggested', t.get('created_at') or ''))
+        wings.setdefault(r.get('wing') or 'Unassigned', []).append({
+            'id': r['id'],
+            'name': r.get('resource_name'),
+            'type': r.get('resource_type'),
+            'department': r.get('department'),
+            'status': r.get('status'),
+            'patient': patient
+        })
+
+    beds = [b for wing in wings.values() for b in wing]
+    occupants = [b['patient'] for b in beds if b['patient']]
+    return jsonify({
+        "status": "success",
+        "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "summary": {
+            "beds": {s: sum(b['status'] == s for b in beds) for s in ('available', 'occupied', 'cleaning', 'maintenance')},
+            "critical_patients": sum(p.get('acuity') == 'critical' for p in occupants),
+            "pending_suggestions": sum(t['status'] == 'suggested' for p in occupants for t in p['tasks'])
+        },
+        "wards": [{"wing": wing, "beds": wings[wing]} for wing in sorted(wings)]
+    }), 200
+
+
+# 7. Care Task Decision (Write): a clinician accepts/rejects an AI suggestion, or completes a task
+TASK_TRANSITIONS = {
+    # decision: (required current status, new status, timestamp column)
+    'accept': ('suggested', 'accepted', 'decided_at'),
+    'reject': ('suggested', 'rejected', 'decided_at'),
+    'done':   ('accepted', 'done', 'completed_at')
+}
+
+
+@app.route('/api/tasks/<task_id>/decision', methods=['POST'])
+def decide_task(task_id):
+    data = request.get_json(silent=True) or {}
+    decision = str(data.get('decision') or '').strip().lower()
+    clinician_id = str(data.get('clinician_id') or '').strip()
+
+    if decision not in TASK_TRANSITIONS:
+        return jsonify({
+            "status": "error",
+            "error_code": "INVALID_DECISION",
+            "message": "'decision' must be one of: accept, reject, done."
+        }), 400
+    if not clinician_id:
+        return missing_parameter_response("A task decision requires 'clinician_id', so it's clear who made it.")
+    if supabase is None:
+        return supabase_unavailable_response()
+
+    current_status, new_status, timestamp_column = TASK_TRANSITIONS[decision]
+    changes = {'status': new_status, timestamp_column: datetime.now(timezone.utc).isoformat()}
+    if decision in ('accept', 'reject'):
+        changes['decided_by'] = clinician_id
+
+    try:
+        # Only moves from the expected status, so two clinicians can't both decide the same task
+        updated = supabase.table('care_tasks').update(changes) \
+            .eq('id', task_id).eq('status', current_status).execute().data or []
+        if updated:
+            return jsonify({"status": "success", "task": updated[0]}), 200
+
+        existing = supabase.table('care_tasks').select('id, status').eq('id', task_id).execute().data or []
+    except Exception as e:
+        print(f"[task-decision] Supabase error: {e}")
+        return supabase_query_failed_response("Unable to update the care task.")
+
+    if not existing:
+        return jsonify({"status": "error", "error_code": "TASK_NOT_FOUND",
+                        "message": f"No care task with id {task_id}."}), 404
+    return jsonify({
+        "status": "error",
+        "error_code": "INVALID_TRANSITION",
+        "message": f"Can't {decision} a task that is '{existing[0]['status']}' (it must be '{current_status}')."
+    }), 409
+
+
+# 8. Bed Cleaned (Write): a bed released by a transfer becomes available again
+@app.route('/api/beds/<bed_id>/mark-clean', methods=['POST'])
+def mark_bed_clean(bed_id):
+    if supabase is None:
+        return supabase_unavailable_response()
+    try:
+        updated = supabase.table('hospital_resources').update({'status': 'available'}) \
+            .eq('id', bed_id).eq('status', 'cleaning').execute().data or []
+        if updated:
+            return jsonify({"status": "success", "bed": {"id": bed_id, "status": "available"}}), 200
+        existing = supabase.table('hospital_resources').select('id, status').eq('id', bed_id).execute().data or []
+    except Exception as e:
+        print(f"[mark-clean] Supabase error: {e}")
+        return supabase_query_failed_response("Unable to update the bed.")
+
+    if not existing:
+        return jsonify({"status": "error", "error_code": "BED_NOT_FOUND", "message": f"No bed with id {bed_id}."}), 404
+    return jsonify({
+        "status": "error",
+        "error_code": "INVALID_TRANSITION",
+        "message": f"Only beds being cleaned can be marked clean; {bed_id} is '{existing[0]['status']}'."
+    }), 409
+
 
 # The root route MUST be above the app.run block
 @app.route('/', methods=['GET'])
