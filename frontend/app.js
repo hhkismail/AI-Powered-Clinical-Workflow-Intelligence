@@ -3,8 +3,12 @@
 // Rendering functions are pure (data in, HTML out) so they can be tested without a
 // browser; the controller at the bottom only runs on a real page.
 
-const INGESTION_URL = "http://127.0.0.1:5000/api/process-note";   // Flask ingestion, not FastAPI
-const EMR_API = "http://127.0.0.1:3001";
+// Locally each service has its own port (tools/start.py); deployed, app.py serves them all on one origin
+const LOCAL = typeof location === "undefined" || ["localhost", "127.0.0.1"].includes(location.hostname);
+const INGESTION_URL = LOCAL ? "http://127.0.0.1:5000/api/process-note" : "/ingest/api/process-note";
+const EMR_API = LOCAL ? "http://127.0.0.1:3001" : "/emr";
+// Vercel accepts request bodies up to 4.5 MB; larger photos are shrunk before upload
+const MAX_UPLOAD_BYTES = 4 * 1024 * 1024;
 
 const ACUITY_LABELS = { critical: "Critical", serious: "Serious", stable: "Stable" };
 const WARD_LABELS = { icu: "ICU", observation: "observation", general: "general ward" };
@@ -111,7 +115,8 @@ function renderResult(data) {
     banner += `<div class="notice notice-warning"><strong>Allergy warning</strong>${allergyWarnings.map(a => `<div>${escapeHtml(a.message)}</div>`).join("")}</div>`;
   }
   if (data.ai === "mock") {
-    banner += `<div class="notice notice-info"><strong>Mock AI mode</strong>Planned by keyword rules, not the LLM. Add a Groq key and turn off MOCK_AI for real extraction.</div>`;
+    banner += `<div class="notice notice-info"><strong>Mock AI mode</strong>${data.ai_note ? escapeHtml(data.ai_note)
+      : "Planned by keyword rules, not the LLM. Add a Groq key and turn off MOCK_AI for real extraction."}</div>`;
   }
   if (data.status === "halted_for_clarification") return banner;
 
@@ -140,6 +145,20 @@ function renderResult(data) {
 }
 
 // ---------- Controller (browser only) ----------
+
+// A photo over the upload limit, re-encoded as a smaller JPEG. Anything under the
+// limit is sent untouched (the bundled samples are recognised by their exact bytes).
+async function shrinkPhoto(file) {
+  if (file.size <= MAX_UPLOAD_BYTES || !file.type.startsWith("image/")) return file;
+  const image = await createImageBitmap(file);
+  const scale = Math.min(1, 2000 / Math.max(image.width, image.height));
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.round(image.width * scale);
+  canvas.height = Math.round(image.height * scale);
+  canvas.getContext("2d").drawImage(image, 0, 0, canvas.width, canvas.height);
+  const blob = await new Promise(resolve => canvas.toBlob(resolve, "image/jpeg", 0.85));
+  return new File([blob], file.name.replace(/\.\w+$/, "") + ".jpg", { type: "image/jpeg" });
+}
 
 if (typeof document !== "undefined") {
   const $ = id => document.getElementById(id);
@@ -215,7 +234,14 @@ if (typeof document !== "undefined") {
     form.append("department", $("department").value);
     form.append("priority", document.querySelector("input[name='priority']:checked").value);
     form.append("typed_text", typedText);
-    if (fileInput.files.length) form.append("file", fileInput.files[0]);
+    if (fileInput.files.length) {
+      const file = await shrinkPhoto(fileInput.files[0]);
+      if (file.size > MAX_UPLOAD_BYTES) {
+        formError("That file is over 4 MB. Use a shorter voice memo or a smaller photo.");
+        return;
+      }
+      form.append("file", file);
+    }
 
     const button = $("submit-btn");
     button.disabled = true;

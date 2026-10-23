@@ -1,0 +1,9 @@
+# Not needed by the deployed app (app.py); keeps uploads and the function small
+*.pdf
+tests/
+evals/
+.github/
+.venv/
+venv/
+__pycache__/
+.env

@@ -5,6 +5,8 @@ from datetime import datetime, timezone
 import requests as req
 import base64, hashlib, os, sys, tempfile
 
+import demo_budget
+
 load_dotenv()
 
 # Write log lines straight away, even when output is redirected to a file
@@ -22,6 +24,21 @@ TIMEOUT          = int(os.getenv("TIMEOUT_SECONDS", 30))
 GROQ_VISION_MODEL = os.getenv("GROQ_VISION_MODEL", "qwen/qwen3.8-27b")
 SAMPLES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "docs", "samples")
 MEDIA = (".jpg", ".jpeg", ".png", ".mp3", ".wav", ".m4a")
+
+
+# The Vercel entrypoint (app.py) sets this to call the orchestrator in-process:
+# payload -> (response JSON, status code)
+ORCHESTRATE = None
+_supabase = None
+
+
+def budget_db():
+    """Supabase client for the public demo's AI budget (created on first use)."""
+    global _supabase
+    if _supabase is None:
+        from supabase import create_client
+        _supabase = create_client(os.getenv("SUPABASE_URL"), os.getenv("SUPABASE_SECRET_KEY"))
+    return _supabase
 
 
 def mock_ai_enabled() -> bool:
@@ -125,6 +142,20 @@ def process_note():
     if not patient_id or not doctor_id:
         return jsonify({"error": "patient_id and doctor_id are required"}), 400
 
+    # On the public demo, notes past the AI budget are planned by the mock AI
+    use_mock, budget_reason = mock_ai_enabled(), None
+    if demo_budget.enabled() and not use_mock:
+        try:
+            decision, budget_reason = demo_budget.decide(
+                budget_db(), demo_budget.client_key(request.headers, request.remote_addr))
+        except Exception as e:
+            # If the budget can't be checked, protect the key rather than the visitor
+            print(f"[ingestion] AI budget check failed, using the mock AI: {e}")
+            decision, budget_reason = demo_budget.MOCK, "site"
+        if decision == demo_budget.REFUSE:
+            return jsonify({"error": "That's a lot of notes from one visitor. Try the demo again in an hour."}), 429
+        use_mock = decision == demo_budget.MOCK
+
     # 2. Extract raw text. Typed text and an uploaded file are combined, so
     # context typed alongside a photo or voice memo isn't lost.
     input_methods = ["text"] if typed_text else []
@@ -135,7 +166,7 @@ def process_note():
         fname = uploaded.filename.lower()
 
         needs_groq = fname.endswith(MEDIA)
-        if needs_groq and not GROQ_API_KEY and not mock_ai_enabled():
+        if needs_groq and not GROQ_API_KEY and not use_mock:
             return jsonify({"error": "GROQ_API_KEY is not set, so image/audio uploads can't be processed. Add your Groq key to .env."}), 500
 
         with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(fname)[1]) as tmp:
@@ -143,11 +174,13 @@ def process_note():
             tmp_path = tmp.name
 
         try:
-            if needs_groq and mock_ai_enabled():
+            if needs_groq and use_mock:
                 extracted = sample_transcript(tmp_path)
                 if extracted is None:
-                    return jsonify({"error": "Mock AI mode can only read the sample files in docs/samples, since there's "
-                                             "no OCR or speech model without a Groq key. Type the note instead."}), 400
+                    why = demo_budget.UPLOAD_REASONS.get(
+                        budget_reason, "Mock AI mode has no OCR or speech model without a Groq key")
+                    return jsonify({"error": f"{why}, so only the sample files in docs/samples can be read. "
+                                             "Type the note instead."}), 400
                 input_methods.append("audio" if fname.endswith((".mp3", ".wav", ".m4a")) else "image")
 
             elif fname.endswith((".jpg", ".jpeg", ".png")):
@@ -173,7 +206,8 @@ def process_note():
             "patient_id": patient_id,
             "department": department,
             "timestamp":  datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "priority":   priority
+            "priority":   priority,
+            "ai":         "mock" if use_mock else None
         },
         "payload": {
             "input_methods_used": input_methods,
@@ -183,8 +217,14 @@ def process_note():
 
     # 4. Forward to the orchestrator
     try:
-        resp = req.post(ORCHESTRATOR_URL, json=payload, timeout=TIMEOUT)
-        return jsonify(resp.json()), resp.status_code
+        if ORCHESTRATE is not None:
+            body, status = ORCHESTRATE(payload)
+        else:
+            resp = req.post(ORCHESTRATOR_URL, json=payload, timeout=TIMEOUT)
+            body, status = resp.json(), resp.status_code
+        if budget_reason and isinstance(body, dict):
+            body["ai_note"] = demo_budget.REASONS[budget_reason]
+        return jsonify(body), status
     except req.exceptions.Timeout:
         return jsonify({"error": "The orchestrator timed out"}), 504
     except Exception as e:
