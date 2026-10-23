@@ -195,3 +195,5 @@ dl.facts dd { padding: 9px 0; border-bottom: 1px solid var(--line-2); }
   .kpis { grid-template-columns: repeat(2, 1fr); }
   .notes-layout, .field-row { grid-template-columns: 1fr; }
 }
+.allergy-inline { display: inline-flex; align-items: center; gap: 3px; font-size: 12px; color: #93370d; }
+.allergy-inline svg.icon { width: 13px; height: 13px; color: var(--ser); }

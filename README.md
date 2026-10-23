@@ -158,7 +158,10 @@ python evals/run_safety_eval.py --runs 3
 ---
 
 ## 🛡️ Safety Behaviour (and Current Limits)
-* **Allergy checks:** The patient's known allergies and active prescriptions are included in the LLM prompt, and the model is instructed to halt on a conflict. This check is done by the LLM, not by a deterministic rule.
+* **Allergy checks (deterministic):** every prescription is checked by a rule table ([`Ophia/allergy_rules.py`](./Ophia/allergy_rules.py)) of drug classes and cross-reactivities, so the same inputs always give the same outcome.
+  * **Block:** the drug is the allergen or in its class (aspirin allergy + aspirin, penicillin allergy + amoxicillin). The note is halted before anything runs, even if the LLM missed it, and the record API refuses it too.
+  * **Warn:** cross-reactivity is possible (penicillin allergy + meropenem or ceftriaxone, ibuprofen allergy + naproxen). The note goes ahead, the warning is shown on the result, and it stays on that medication on the ward board.
+  * The LLM still sees the allergies and halts on direct conflicts as a second layer, and catches drugs the table doesn't know. The rule table is a demonstration set, not a complete clinical knowledge base.
 * **Halting:** If the LLM halts, the request returns `halted_for_clarification` and nothing is executed. If some actions succeed and others are rejected or fail (e.g. the record is saved but no bed is free), the request returns `partial_success`. The dashboard then lists exactly which actions failed; earlier actions aren't rolled back.
 * **Audit trail:** Each processed note is saved to `clinical_notes` with the original text, the extracted diagnoses and prescriptions, and the LLM's reasoning for its actions.
 * **Ward board data:** Prescriptions become `medication_orders` (routes normalised, e.g. "orally" → `oral`, "IV drip" → `iv`), the patient's acuity is updated, and next steps become `care_tasks` with status `suggested`. AI suggestions aren't real tasks until a clinician accepts them. Repeated notes don't duplicate active medications, open tasks or beds. Asking for a different kind of bed is a transfer, and the old bed is released for cleaning.

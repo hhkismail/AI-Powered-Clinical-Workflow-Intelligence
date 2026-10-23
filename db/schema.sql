@@ -65,7 +65,8 @@ create table if not exists public.medication_orders (
     started_at     timestamptz not null default now(),
     ended_at       timestamptz,
     stopped_by     text,                                  -- clinician ID (migration 005)
-    stop_reason    text
+    stop_reason    text,
+    allergy_warning text                                  -- possible cross-reactivity (migration 006)
 );
 
 -- What should happen next. AI suggestions start as 'suggested' and only become

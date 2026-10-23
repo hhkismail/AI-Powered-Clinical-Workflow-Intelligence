@@ -22,11 +22,11 @@ def board_db(fake_db):
     ]
     fake_db.tables["medication_orders"] = [
         {"id": "m1", "patient_id": "PT-30554", "drug": "Metoprolol", "dose": "25mg", "route": "oral",
-         "frequency": "BD", "status": "active", "started_at": "2026-10-23T08:00:00Z"},
+         "frequency": "BD", "status": "active", "started_at": "2026-10-23T08:00:00Z", "allergy_warning": None},
         {"id": "m2", "patient_id": "PT-30554", "drug": "Heparin", "dose": "5000 units", "route": "iv",
-         "frequency": "continuous", "status": "active", "started_at": "2026-10-23T08:05:00Z"},
+         "frequency": "continuous", "status": "active", "started_at": "2026-10-23T08:05:00Z", "allergy_warning": None},
         {"id": "m3", "patient_id": "PT-30554", "drug": "Amiodarone", "dose": "200mg", "route": "oral",
-         "frequency": None, "status": "stopped", "started_at": "2026-10-22T08:00:00Z"},
+         "frequency": None, "status": "stopped", "started_at": "2026-10-22T08:00:00Z", "allergy_warning": None},
     ]
     fake_db.tables["care_tasks"] = [
         {"id": "t1", "patient_id": "PT-30554", "description": "Telemetry", "category": "monitoring",

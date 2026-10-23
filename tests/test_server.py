@@ -372,3 +372,24 @@ def test_lowercase_drug_names_are_capitalised_but_others_kept(client, fake_db):
 
     assert [m["drug"] for m in fake_db.tables["medication_orders"]] == [
         "Diltiazem", "Piperacillin-tazobactam", "IV Paracetamol"]
+
+
+# ---------- Allergy backstop in the record API ----------
+
+def test_update_record_refuses_a_blocked_drug_and_writes_nothing(client, fake_db):
+    # PT-30554 is allergic to aspirin (conftest)
+    resp = client.post("/api/update-record", json={**FULL_NOTE, "prescriptions": [{"drug": "Aspirin", "dosage": "300mg"}]})
+
+    assert resp.status_code == 400 and resp.get_json()["error_code"] == "ALLERGY_CONFLICT"
+    assert "clinical_notes" not in fake_db.tables and "medication_orders" not in fake_db.tables
+
+
+def test_cross_reactivity_warning_is_stored_on_the_order(client, fake_db):
+    fake_db.tables["patients"][0]["allergies"] = ["Penicillin"]
+
+    client.post("/api/update-record", json={**FULL_NOTE, "prescriptions": [
+        {"drug": "Meropenem", "dosage": "1g", "route": "iv"}, {"drug": "Paracetamol", "dosage": "1g"}]})
+
+    warnings = {m["drug"]: m["allergy_warning"] for m in fake_db.tables["medication_orders"]}
+    assert "cross-reactivity with the documented Penicillin allergy" in warnings["Meropenem"]
+    assert warnings["Paracetamol"] is None

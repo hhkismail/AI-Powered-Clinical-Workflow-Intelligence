@@ -117,3 +117,9 @@
 .btn-link { border: 0; background: none; padding: 2px 4px; font: 500 12px "IBM Plex Sans", Arial, sans-serif; color: var(--ink-3); cursor: pointer; border-radius: 4px; }
 .btn-link:hover { color: var(--crit); background: var(--crit-soft); }
 .med-stop-confirm { grid-column: 1 / -1; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: 6px; padding: 8px 10px; border-radius: var(--radius-sm); background: var(--crit-soft); font-size: 13px; }
+
+/* A medication given despite possible allergy cross-reactivity */
+.med-warn { border-color: #fdb022; background: var(--ser-soft); }
+.med-warn svg.icon { width: 13px; height: 13px; color: var(--ser); align-self: center; }
+.med-warning-text { display: flex; gap: 6px; align-items: flex-start; margin-top: 4px; font-size: 12px; color: #93370d; }
+.med-warning-text svg.icon { width: 14px; height: 14px; margin-top: 1px; color: var(--ser); }
