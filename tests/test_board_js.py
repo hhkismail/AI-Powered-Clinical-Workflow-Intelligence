@@ -31,6 +31,14 @@ RAJESH_BED = {
         ],
     },
 }
+CLEANING_BED = {"id": "RES-CARD-01", "name": "Bay 04", "type": "GEN_WARD", "department": "Cardiology",
+                "status": "cleaning", "patient": None}
+
+
+def board_with(*beds, summary=None):
+    return {"summary": summary or {"beds": {"available": 0, "occupied": 1, "cleaning": 1, "maintenance": 0},
+                                   "critical_patients": 0, "pending_suggestions": 1},
+            "wards": [{"wing": "Observation Wing B", "beds": list(beds)}]}
 
 
 @pytest.fixture(scope="module")
@@ -47,23 +55,27 @@ def js():
 def test_occupied_card_shows_patient_acuity_allergies_and_iv_line(js):
     html = js("renderBedCard", RAJESH_BED)
 
-    assert "Rajesh Kumar" in html and "acuity-serious" in html and "Serious" in html
-    assert "Allergies: Aspirin" in html
-    assert '<span class="route route-iv">IV</span><strong>Heparin</strong>' in html
-    assert "1 AI suggestion to review" in html
-    assert "Telemetry" in html   # accepted tasks are listed on the card
+    assert "Rajesh Kumar" in html and "acuity-serious" in html and ">Serious<" in html
+    assert "Allergic to Aspirin" in html
+    assert '<span class="med med-iv"><span class="route">IV</span><b>Heparin</b>5000 units</span>' in html
+    assert "1 to review" in html
+    assert "1 task in progress" in html
 
 
-def test_card_without_acuity_says_so(js):
+def test_card_without_acuity_says_not_assessed(js):
     bed = json.loads(json.dumps(RAJESH_BED))
     bed["patient"]["acuity"] = None
 
-    assert "Acuity not set" in js("renderBedCard", bed)
+    assert "Not assessed" in js("renderBedCard", bed)
+
+
+def test_open_card_is_highlighted(js):
+    assert "is-open" in js("renderBedCard", RAJESH_BED, "RES-NEURO-01")
+    assert "is-open" not in js("renderBedCard", RAJESH_BED, "RES-ICU-01")
 
 
 def test_cleaning_bed_offers_mark_clean_and_no_patient(js):
-    html = js("renderBedCard", {"id": "RES-CARD-01", "name": "Bay 04", "type": "GEN_WARD",
-                                "department": "Cardiology", "status": "cleaning", "patient": None})
+    html = js("renderBedCard", CLEANING_BED)
 
     assert 'data-action="mark-clean" data-bed="RES-CARD-01"' in html
     assert "Being cleaned" in html
@@ -78,31 +90,46 @@ def test_panel_offers_accept_reject_for_suggestions_and_done_for_accepted(js):
     assert 'data-decision="done" data-task="t1"' in html
     assert 'data-decision="accept" data-task="t1"' not in html
     assert "Accepted by DR-7742" in html
+    assert "continuous" in html   # frequency is shown in the drawer
 
 
 def test_llm_and_database_text_is_escaped(js):
     bed = json.loads(json.dumps(RAJESH_BED))
     bed["patient"]["name"] = "<img src=x onerror=alert(1)>"
+    bed["patient"]["acuity"] = "critical"
     bed["patient"]["tasks"][0]["description"] = "<script>steal()</script>"
     bed["patient"]["medications"][0]["drug"] = '"><b>bold</b>'
 
-    for html in (js("renderBedCard", bed), js("renderPanel", bed, 0)):
+    for html in (js("renderBedCard", bed), js("renderPanel", bed, 0), js("renderSummary", board_with(bed))):
         assert "<img" not in html and "<script>" not in html and "<b>bold" not in html
         assert "&lt;img src=x onerror=alert(1)&gt;" in html
 
 
-def test_summary_chips(js):
-    html = js("renderSummary", {"beds": {"available": 2, "occupied": 3, "cleaning": 1},
-                                "critical_patients": 1, "pending_suggestions": 4})
+def test_summary_names_critical_patients(js):
+    bed = json.loads(json.dumps(RAJESH_BED))
+    bed["patient"]["acuity"] = "critical"
+    board = board_with(bed, CLEANING_BED, summary={"beds": {"available": 2, "occupied": 3, "cleaning": 1, "maintenance": 0},
+                                                   "critical_patients": 1, "pending_suggestions": 4})
 
-    assert "<span>2</span>available" in html
-    assert "chip-critical" in html and "<span>4</span>AI suggestions to review" in html
+    html = js("renderSummary", board)
+
+    assert "2<span> / 6</span>" in html
+    assert "1 bed being cleaned" in html
+    assert "kpi-critical" in html and "Rajesh Kumar" in html
+    assert "Waiting on a clinician" in html
+
+
+def test_summary_when_nothing_is_pending(js):
+    html = js("renderSummary", board_with(CLEANING_BED, summary={"beds": {"available": 1}, "critical_patients": 0,
+                                                                 "pending_suggestions": 0}))
+
+    assert "No critical patients" in html and "All reviewed" in html
 
 
 def test_board_groups_cards_by_wing(js):
-    html = js("renderBoard", {"wards": [{"wing": "Observation Wing B", "beds": [RAJESH_BED]}]})
+    html = js("renderBoard", board_with(RAJESH_BED, CLEANING_BED))
 
-    assert "<h2>Observation Wing B</h2>" in html and "Rajesh Kumar" in html
+    assert "<h2>Observation Wing B <span>0 of 2 free</span></h2>" in html and "Rajesh Kumar" in html
 
 
 @pytest.mark.parametrize("seconds, expected", [(5, "5s ago"), (180, "3 min ago"), (7200, "2 h ago"), (172800, "2 d ago")])
@@ -110,3 +137,21 @@ def test_relative_time(js, seconds, expected):
     now = 1_800_000_000_000
     iso = js("(ms) => new Date(ms).toISOString()", now - seconds * 1000)
     assert js("relativeTime", iso, now) == expected
+
+
+def test_board_shows_patients_as_cards_and_other_beds_as_tiles(js):
+    html = js("renderBoard", board_with(RAJESH_BED, CLEANING_BED))
+
+    assert html.count('class="bed-card') == 1
+    assert 'class="bed-tile tile-cleaning"' in html
+    assert 'data-action="mark-clean" data-bed="RES-CARD-01"' in html
+
+
+def test_panel_offers_discharge_then_asks_for_confirmation(js):
+    first = js("renderPanel", RAJESH_BED, 0, False)
+    assert 'data-action="discharge-start"' in first and 'data-action="discharge-confirm"' not in first
+
+    confirm = js("renderPanel", RAJESH_BED, 0, True)
+    assert 'data-action="discharge-confirm" data-bed="RES-NEURO-01"' in confirm
+    assert "Discharge Rajesh Kumar?" in confirm
+    assert "2 active medications will be marked completed" in confirm and "2 open tasks cancelled" in confirm

@@ -65,6 +65,19 @@ def test_image_is_ocrd_and_forwarded(client, forwarded, monkeypatch):
     assert forwarded[0][1]["payload"] == {"input_methods_used": ["image"], "raw_text": "Rx: Metoprolol 25mg PO"}
 
 
+def test_typed_text_and_uploaded_file_are_combined(client, forwarded, monkeypatch):
+    monkeypatch.setattr(ingestion, "transcribe_audio", lambda path: "Start amoxicillin 1 gram orally three times a day.")
+
+    resp = client.post("/api/process-note", data={
+        "patient_id": "P", "doctor_id": "D", "typed_text": "Follow-up to this morning's ward round.",
+        "file": (io.BytesIO(b"RIFF"), "memo.wav")})
+
+    assert resp.status_code == 200
+    assert forwarded[0][1]["payload"] == {
+        "input_methods_used": ["text", "audio"],
+        "raw_text": "Follow-up to this morning's ward round.\n\nStart amoxicillin 1 gram orally three times a day."}
+
+
 def test_image_upload_without_api_key_returns_clear_json_error(client, forwarded, monkeypatch):
     monkeypatch.setattr(ingestion, "GROQ_API_KEY", None)
 

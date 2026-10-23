@@ -3,40 +3,53 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Ophia Ward Board</title>
+  <title>Ward board · Ophia</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="icon" href="logo.svg" type="image/svg+xml">
   <link rel="stylesheet" href="style.css">
   <link rel="stylesheet" href="board.css">
 </head>
 <body>
-  <header class="board-header">
-    <div>
-      <h1>Ward Board</h1>
-      <p>Live bed status, acuity, medications and next steps from processed clinical notes</p>
-    </div>
-    <nav>
-      <a href="index.html">Clinical notes</a>
-      <a href="board.html" aria-current="page">Ward board</a>
+<div class="app">
+  <aside class="sidebar">
+    <div class="logo"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="12" cy="12" r="9.25" stroke="currentColor" stroke-width="2.5"/><path d="M4.5 12.5h4l1.6-3.5 2.6 7 1.8-3.5h5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>ophia</div>
+    <div class="nav-section">Workspace</div>
+    <nav aria-label="Main">
+      <a href="index.html">
+        <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 4h6M9 4a2 2 0 0 0-2 2h10a2 2 0 0 0-2-2M7 6H6a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-1M8 12h8M8 16h5"/></svg>
+        Clinical notes
+      </a>
+      <a href="board.html" aria-current="page">
+        <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7v12M3 13h18v6M21 13v-2a3 3 0 0 0-3-3h-7v5M7 11.5a1.5 1.5 0 1 0 0-.01"/></svg>
+        Ward board <span id="nav-review-count" class="nav-count" title="Suggestions to review"></span>
+      </a>
     </nav>
-  </header>
-
-  <div class="toolbar">
-    <div id="summary" class="summary"></div>
-    <div class="toolbar-right">
+    <div class="sidebar-foot">
       <label for="clinician-id">Clinician ID</label>
       <input id="clinician-id" type="text" placeholder="e.g. DR-7742" autocomplete="off">
+    </div>
+  </aside>
+
+  <main class="content">
+    <div class="page-head">
+      <div>
+        <h1>Ward board</h1>
+        <p>Beds, acuity, medications and next steps across all wings</p>
+      </div>
       <span id="updated" class="muted small" aria-live="polite"></span>
     </div>
-  </div>
 
-  <div id="board-error" class="board-error hidden" role="alert"></div>
+    <div id="board-error" class="notice notice-error hidden" role="alert"></div>
+    <div id="summary" class="kpis"></div>
+    <div id="board" class="wings"><p class="muted">Loading ward board…</p></div>
+  </main>
+</div>
 
-  <div class="board-layout">
-    <main id="board" class="board-main"><p class="muted">Loading ward board…</p></main>
-    <aside id="panel" class="panel hidden" aria-label="Patient details">
-      <div id="panel-content"></div>
-    </aside>
-  </div>
+<aside id="panel" class="drawer hidden" aria-label="Patient details">
+  <div id="panel-content"></div>
+</aside>
 
-  <script src="board.js"></script>
+<script src="board.js"></script>
 </body>
 </html>
